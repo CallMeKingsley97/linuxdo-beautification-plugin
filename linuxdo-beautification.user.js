@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX DO Beautification
 // @namespace    https://linux.do/
-// @version      0.2.1
+// @version      0.2.8
 // @description  LINUX DO 帖子楼中楼、书签与自定义高亮
 // @author       linuxdo-beautification-plugin
 // @match        https://linux.do/*
@@ -18,6 +18,9 @@
 
   const STYLE_ID = "ldo-beautification-style";
   const CONFIG_KEY = "ldo-beautification-config";
+  const FOLLOWED_USERS_CACHE_KEY = "ldo-beautification-followed-users-v1";
+  const FOLLOW_SYNC_LOCK_KEY = "ldo-beautification-follow-sync-lock";
+  const FOLLOW_SYNC_LOCK_TTL_MS = 60_000;
   const MAX_NEST_DEPTH = 3;
   const TOPIC_POST_SELECTOR = ".topic-post[data-post-number]";
   const TOPIC_ROW_SELECTOR =
@@ -46,9 +49,10 @@
     isScheduled: false,
     config: loadConfig(),
     lastTopicKey: "",
-    topicJsonKey: "",
-    topicJsonRelations: new Map(),
-    topicJsonLoading: null,
+    followedUsers: new Set(),
+    followedUsersOwner: "",
+    followSyncPromise: null,
+    followMutations: new Map(),
     postPlaceholders: new WeakMap(),
     ignoreMutationsUntil: 0,
   };
@@ -61,11 +65,13 @@
     scheduleEnhance(0);
     window.addEventListener("load", () => scheduleEnhance(100));
     window.addEventListener("popstate", () => scheduleEnhance(120));
-    document.addEventListener("click", () => scheduleEnhance(180), true);
+    document.addEventListener("click", handleFollowButtonClick, true);
   }
 
   function injectStyle() {
+    document.documentElement.classList.add("ldo-apple-ui");
     if (document.getElementById(STYLE_ID)) {
+      document.documentElement.classList.add("ldo-beautification-ready");
       return;
     }
 
@@ -73,10 +79,38 @@
     style.id = STYLE_ID;
     style.textContent = `
       :root {
-        --ldo-nested-line: #4e9f7a;
-        --ldo-nested-bg: color-mix(in srgb, #4e9f7a 6%, var(--secondary, #fff));
-        --ldo-nested-border: color-mix(in srgb, #4e9f7a 22%, var(--primary-low, #e7e7e7));
-        --ldo-nested-muted: color-mix(in srgb, #4e9f7a 48%, var(--primary-medium, #888));
+        --ldo-apple-font:
+          -apple-system,
+          BlinkMacSystemFont,
+          "SF Pro Text",
+          "SF Pro Display",
+          "PingFang SC",
+          "Microsoft YaHei",
+          sans-serif;
+        --ldo-apple-page-bg: color-mix(in srgb, var(--secondary, #fff) 94%, #000 6%);
+        --ldo-apple-surface: color-mix(in srgb, var(--secondary, #fff) 84%, transparent);
+        --ldo-apple-surface-solid: var(--secondary, #fff);
+        --ldo-apple-surface-elevated:
+          color-mix(in srgb, var(--secondary, #fff) 94%, var(--primary, #222) 6%);
+        --ldo-apple-label: var(--primary, #1d1d1f);
+        --ldo-apple-label-secondary: var(--primary-medium, #6e6e73);
+        --ldo-apple-label-tertiary: color-mix(in srgb, var(--primary, #222) 52%, transparent);
+        --ldo-apple-separator: color-mix(in srgb, var(--primary, #222) 14%, transparent);
+        --ldo-apple-separator-strong: color-mix(in srgb, var(--primary, #222) 24%, transparent);
+        --ldo-apple-hover: color-mix(in srgb, var(--primary, #222) 6%, transparent);
+        --ldo-apple-selected: color-mix(in srgb, #34c759 14%, transparent);
+        --ldo-apple-accent: #34c759;
+        --ldo-apple-focus: var(--tertiary, #007aff);
+        --ldo-apple-radius-small: 8px;
+        --ldo-apple-radius-medium: 12px;
+        --ldo-apple-radius-large: 18px;
+        --ldo-apple-shadow: 0 10px 32px rgba(0, 0, 0, 0.1);
+        --ldo-apple-shadow-elevated: 0 18px 48px rgba(0, 0, 0, 0.2);
+        --ldo-apple-transition: 180ms cubic-bezier(0.25, 0.1, 0.25, 1);
+        --ldo-nested-line: var(--ldo-apple-separator-strong);
+        --ldo-nested-bg: var(--ldo-apple-surface-elevated);
+        --ldo-nested-border: var(--ldo-apple-separator);
+        --ldo-nested-muted: var(--primary-medium, #888);
         --ldo-bookmark-bg: color-mix(in srgb, #f2b84b 18%, transparent);
         --ldo-bookmark-bg-strong: color-mix(in srgb, #f2b84b 28%, transparent);
         --ldo-bookmark-border: #d18818;
@@ -84,36 +118,430 @@
         --ldo-highlight-color: #40b883;
       }
 
+      /* 第一阶段：全局视觉系统 */
+      html.ldo-apple-ui body {
+        color: var(--ldo-apple-label);
+        background: var(--ldo-apple-page-bg);
+        font-family: var(--ldo-apple-font);
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        text-rendering: optimizeLegibility;
+      }
+
+      html.ldo-apple-ui button,
+      html.ldo-apple-ui input,
+      html.ldo-apple-ui select,
+      html.ldo-apple-ui textarea {
+        font-family: var(--ldo-apple-font);
+      }
+
+      html.ldo-apple-ui ::selection {
+        color: var(--ldo-apple-label);
+        background: color-mix(in srgb, var(--ldo-apple-focus) 24%, transparent);
+      }
+
+      html.ldo-apple-ui :focus-visible {
+        outline: 3px solid color-mix(in srgb, var(--ldo-apple-focus) 42%, transparent);
+        outline-offset: 2px;
+      }
+
+      html.ldo-apple-ui #main-outlet {
+        padding-top: 20px;
+      }
+
+      html.ldo-apple-ui a,
+      html.ldo-apple-ui button,
+      html.ldo-apple-ui .btn {
+        transition:
+          color var(--ldo-apple-transition),
+          background-color var(--ldo-apple-transition),
+          border-color var(--ldo-apple-transition),
+          opacity var(--ldo-apple-transition),
+          transform var(--ldo-apple-transition),
+          box-shadow var(--ldo-apple-transition);
+      }
+
+      html.ldo-apple-ui {
+        scrollbar-color: var(--ldo-apple-separator-strong) transparent;
+        scrollbar-width: thin;
+      }
+
+      html.ldo-apple-ui ::-webkit-scrollbar {
+        width: 10px;
+        height: 10px;
+      }
+
+      html.ldo-apple-ui ::-webkit-scrollbar-thumb {
+        border: 3px solid transparent;
+        border-radius: 999px;
+        background: var(--ldo-apple-separator-strong);
+        background-clip: padding-box;
+      }
+
+      html.ldo-apple-ui ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      /* 第二阶段：顶部导航 */
+      html.ldo-apple-ui .d-header-wrap {
+        background: transparent;
+      }
+
+      html.ldo-apple-ui .d-header {
+        min-height: 54px;
+        border-bottom: 1px solid var(--ldo-apple-separator);
+        background: var(--ldo-apple-surface);
+        box-shadow: none;
+        backdrop-filter: saturate(165%) blur(20px);
+        -webkit-backdrop-filter: saturate(165%) blur(20px);
+      }
+
+      html.ldo-apple-ui .d-header .wrap {
+        min-height: 54px;
+      }
+
+      html.ldo-apple-ui .d-header-icons .icon,
+      html.ldo-apple-ui .d-header .header-buttons .btn,
+      html.ldo-apple-ui .d-header .panel .widget-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 36px;
+        min-height: 36px;
+        border: 0;
+        border-radius: 10px;
+        color: var(--ldo-apple-label-secondary);
+        background: transparent;
+      }
+
+      html.ldo-apple-ui .d-header-icons .icon:hover,
+      html.ldo-apple-ui .d-header-icons .icon:focus-visible,
+      html.ldo-apple-ui .d-header .header-buttons .btn:hover,
+      html.ldo-apple-ui .d-header .panel .widget-button:hover {
+        color: var(--ldo-apple-label);
+        background: var(--ldo-apple-hover);
+      }
+
+      html.ldo-apple-ui .d-header .title img,
+      html.ldo-apple-ui .d-header .title .logo-big,
+      html.ldo-apple-ui .d-header .title .logo-small {
+        filter: saturate(0.92) contrast(1.02);
+      }
+
+      /* 第二阶段：左侧导航 */
+      html.ldo-apple-ui .sidebar-wrapper {
+        border-right: 1px solid var(--ldo-apple-separator);
+        background: var(--ldo-apple-surface);
+        box-shadow: none;
+        backdrop-filter: saturate(145%) blur(18px);
+        -webkit-backdrop-filter: saturate(145%) blur(18px);
+      }
+
+      html.ldo-apple-ui .sidebar-container {
+        padding-top: 10px;
+      }
+
+      html.ldo-apple-ui .sidebar-section-wrapper {
+        padding-inline: 8px;
+      }
+
+      html.ldo-apple-ui .sidebar-section-header {
+        min-height: 30px;
+        padding-inline: 10px;
+        color: var(--ldo-apple-label-tertiary);
+        font-size: 0.72rem;
+        font-weight: 650;
+        letter-spacing: 0.01em;
+      }
+
+      html.ldo-apple-ui .sidebar-section-link-wrapper {
+        margin-block: 2px;
+      }
+
+      html.ldo-apple-ui .sidebar-section-link {
+        min-height: 38px;
+        border-radius: 10px;
+        padding-inline: 10px;
+        color: var(--ldo-apple-label-secondary);
+      }
+
+      html.ldo-apple-ui .sidebar-section-link:hover {
+        color: var(--ldo-apple-label);
+        background: var(--ldo-apple-hover);
+      }
+
+      html.ldo-apple-ui .sidebar-section-link.active,
+      html.ldo-apple-ui .sidebar-section-link.--active {
+        color: var(--ldo-apple-label);
+        background: var(--ldo-apple-selected);
+        font-weight: 650;
+      }
+
+      html.ldo-apple-ui .sidebar-section-link-prefix,
+      html.ldo-apple-ui .sidebar-section-link-suffix {
+        opacity: 0.76;
+      }
+
+      /* 第二阶段：主题列表 */
+      html.ldo-apple-ui .topic-list,
+      html.ldo-apple-ui .latest-topic-list {
+        overflow: hidden;
+        border: 1px solid var(--ldo-apple-separator);
+        border-radius: var(--ldo-apple-radius-large);
+        background: var(--ldo-apple-surface-solid);
+        box-shadow: var(--ldo-apple-shadow);
+      }
+
+      html.ldo-apple-ui table.topic-list {
+        border-collapse: separate;
+        border-spacing: 0;
+      }
+
+      html.ldo-apple-ui .topic-list thead,
+      html.ldo-apple-ui .topic-list-header {
+        color: var(--ldo-apple-label-tertiary);
+        background: var(--ldo-apple-surface-elevated);
+        font-size: 0.72rem;
+        font-weight: 650;
+      }
+
+      html.ldo-apple-ui .topic-list th {
+        border-bottom: 1px solid var(--ldo-apple-separator);
+        padding-block: 9px;
+      }
+
+      html.ldo-apple-ui .topic-list-item,
+      html.ldo-apple-ui .latest-topic-list-item {
+        background: transparent;
+      }
+
+      html.ldo-apple-ui .topic-list-item td,
+      html.ldo-apple-ui .latest-topic-list-item {
+        border-bottom: 1px solid var(--ldo-apple-separator);
+        padding-top: 13px;
+        padding-bottom: 13px;
+        transition: background-color var(--ldo-apple-transition);
+      }
+
+      html.ldo-apple-ui .topic-list-item:last-child td,
+      html.ldo-apple-ui .latest-topic-list-item:last-child {
+        border-bottom: 0;
+      }
+
+      html.ldo-apple-ui .topic-list-item:hover td,
+      html.ldo-apple-ui .latest-topic-list-item:hover {
+        background: var(--ldo-apple-hover);
+      }
+
+      html.ldo-apple-ui .topic-list-item.selected td,
+      html.ldo-apple-ui .topic-list-item.visited:hover td {
+        background: color-mix(in srgb, var(--ldo-apple-focus) 7%, transparent);
+      }
+
+      html.ldo-apple-ui .topic-list .main-link a.title,
+      html.ldo-apple-ui .topic-list .topic-title,
+      html.ldo-apple-ui .latest-topic-list-item .main-link a {
+        color: var(--ldo-apple-label);
+        font-size: 1rem;
+        font-weight: 620;
+        line-height: 1.38;
+        letter-spacing: -0.008em;
+      }
+
+      html.ldo-apple-ui .topic-list .topic-excerpt,
+      html.ldo-apple-ui .latest-topic-list-item .topic-excerpt {
+        margin-top: 4px;
+        color: var(--ldo-apple-label-secondary);
+        line-height: 1.5;
+      }
+
+      html.ldo-apple-ui .topic-list .num,
+      html.ldo-apple-ui .topic-list .activity,
+      html.ldo-apple-ui .topic-list .age,
+      html.ldo-apple-ui .latest-topic-list-item .topic-stats {
+        color: var(--ldo-apple-label-secondary);
+        font-variant-numeric: tabular-nums;
+        font-weight: 540;
+      }
+
+      html.ldo-apple-ui .topic-list .posters img.avatar,
+      html.ldo-apple-ui .latest-topic-list-item img.avatar {
+        border-radius: 50%;
+        box-shadow: 0 0 0 1px var(--ldo-apple-separator);
+        transition:
+          transform var(--ldo-apple-transition),
+          box-shadow var(--ldo-apple-transition);
+      }
+
+      html.ldo-apple-ui .topic-list .posters a:hover img.avatar,
+      html.ldo-apple-ui .latest-topic-list-item a:hover img.avatar {
+        z-index: 2;
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--ldo-apple-focus) 34%, transparent);
+        transform: scale(1.05);
+      }
+
+      html.ldo-apple-ui .badge-category__wrapper,
+      html.ldo-apple-ui .discourse-tag.box,
+      html.ldo-apple-ui .discourse-tag.simple {
+        border-radius: 6px;
+      }
+
+      html.ldo-apple-ui .discourse-tag.box {
+        border: 0;
+        color: var(--ldo-apple-label-secondary);
+        background: var(--ldo-apple-hover);
+        font-size: 0.72rem;
+        font-weight: 560;
+      }
+
+      /* 第二阶段：主题与帖子阅读流 */
+      html.ldo-apple-ui #topic-title {
+        margin-bottom: 12px;
+        padding-bottom: 14px;
+        border-bottom: 1px solid var(--ldo-apple-separator);
+      }
+
+      html.ldo-apple-ui #topic-title h1,
+      html.ldo-apple-ui #topic-title .fancy-title {
+        color: var(--ldo-apple-label);
+        font-size: clamp(1.38rem, 2vw, 1.82rem);
+        font-weight: 680;
+        line-height: 1.26;
+        letter-spacing: -0.018em;
+      }
+
+      html.ldo-apple-ui ${TOPIC_POST_SELECTOR}:not(.ldo-nested-post) > article.boxed {
+        border-bottom: 1px solid var(--ldo-apple-separator);
+        border-radius: var(--ldo-apple-radius-medium);
+        background: transparent;
+        box-shadow: none;
+        transition:
+          background-color var(--ldo-apple-transition),
+          box-shadow var(--ldo-apple-transition);
+      }
+
+      html.ldo-apple-ui ${TOPIC_POST_SELECTOR}:not(.ldo-nested-post):hover > article.boxed,
+      html.ldo-apple-ui ${TOPIC_POST_SELECTOR}:not(.ldo-nested-post):focus-within > article.boxed {
+        background: color-mix(in srgb, var(--ldo-apple-surface-solid) 78%, transparent);
+      }
+
+      html.ldo-apple-ui .topic-avatar {
+        padding-top: 20px;
+      }
+
+      html.ldo-apple-ui .topic-avatar img.avatar,
+      html.ldo-apple-ui .topic-meta-data img.avatar {
+        border-radius: 50%;
+        box-shadow: 0 0 0 1px var(--ldo-apple-separator);
+      }
+
+      html.ldo-apple-ui .topic-body {
+        padding-top: 18px;
+        padding-bottom: 22px;
+      }
+
+      html.ldo-apple-ui .topic-meta-data {
+        min-height: 34px;
+      }
+
+      html.ldo-apple-ui .topic-meta-data .names,
+      html.ldo-apple-ui .topic-meta-data .names a,
+      html.ldo-apple-ui .topic-meta-data .username a {
+        color: var(--ldo-apple-label);
+        font-weight: 650;
+      }
+
+      html.ldo-apple-ui .topic-meta-data .post-info,
+      html.ldo-apple-ui .topic-meta-data .relative-date {
+        color: var(--ldo-apple-label-tertiary);
+      }
+
+      html.ldo-apple-ui .cooked {
+        color: var(--ldo-apple-label);
+        font-size: 1rem;
+        line-height: 1.74;
+        letter-spacing: 0.002em;
+      }
+
+      html.ldo-apple-ui .cooked p,
+      html.ldo-apple-ui .cooked ul,
+      html.ldo-apple-ui .cooked ol {
+        margin-bottom: 1em;
+      }
+
+      html.ldo-apple-ui .cooked blockquote {
+        margin-inline: 0;
+        border-left: 3px solid var(--ldo-apple-separator-strong);
+        border-radius: 0 var(--ldo-apple-radius-small) var(--ldo-apple-radius-small) 0;
+        padding: 10px 14px;
+        color: var(--ldo-apple-label-secondary);
+        background: var(--ldo-apple-surface-elevated);
+      }
+
+      html.ldo-apple-ui .cooked pre,
+      html.ldo-apple-ui .cooked .md-table {
+        overflow: auto;
+        border: 1px solid var(--ldo-apple-separator);
+        border-radius: var(--ldo-apple-radius-medium);
+        background: var(--ldo-apple-surface-elevated);
+        box-shadow: none;
+      }
+
+      html.ldo-apple-ui .post-menu-area,
+      html.ldo-apple-ui .post-controls {
+        opacity: 0.72;
+        transition: opacity var(--ldo-apple-transition);
+      }
+
+      html.ldo-apple-ui ${TOPIC_POST_SELECTOR}:hover .post-menu-area,
+      html.ldo-apple-ui ${TOPIC_POST_SELECTOR}:focus-within .post-menu-area,
+      html.ldo-apple-ui ${TOPIC_POST_SELECTOR}:hover .post-controls,
+      html.ldo-apple-ui ${TOPIC_POST_SELECTOR}:focus-within .post-controls {
+        opacity: 1;
+      }
+
+      html.ldo-apple-ui .post-controls .actions button,
+      html.ldo-apple-ui .post-menu-area button {
+        min-width: 34px;
+        min-height: 34px;
+        border-radius: var(--ldo-apple-radius-small);
+      }
+
+      html.ldo-apple-ui .post-controls .actions button:hover,
+      html.ldo-apple-ui .post-menu-area button:hover {
+        background: var(--ldo-apple-hover);
+      }
+
       html.ldo-beautification-ready ${TOPIC_POST_SELECTOR}.ldo-has-nested-replies > article.boxed {
-        box-shadow: inset 2px 0 0 color-mix(in srgb, var(--ldo-nested-line) 64%, transparent);
+        box-shadow: none;
       }
 
       html.ldo-beautification-ready .ldo-nested-replies {
         position: relative;
-        margin: 8px 0 8px 54px;
-        padding: 2px 0 2px 20px;
+        margin: 0 0 6px 6px;
+        padding: 2px 0 2px 12px;
         border-left: 1px solid var(--ldo-nested-border);
       }
 
-      html.ldo-beautification-ready .ldo-nested-replies::before {
+      html.ldo-beautification-ready .ldo-nested-replies > ${TOPIC_POST_SELECTOR}.ldo-nested-post::before {
         content: "";
         position: absolute;
         top: 22px;
-        left: -1px;
-        width: 16px;
+        left: -12px;
+        width: 8px;
         height: 1px;
         background: var(--ldo-nested-border);
       }
 
       html.ldo-beautification-ready ${TOPIC_POST_SELECTOR}.ldo-nested-post {
-        margin-top: 8px;
-        margin-bottom: 8px;
+        position: relative;
+        margin-top: 4px;
+        margin-bottom: 4px;
       }
 
       html.ldo-beautification-ready ${TOPIC_POST_SELECTOR}.ldo-nested-post > article.boxed {
-        border: 1px solid var(--ldo-nested-border);
-        border-left: 2px solid var(--ldo-nested-line);
-        border-radius: 6px;
+        border: 0;
+        border-radius: var(--ldo-apple-radius-small, 8px);
         background: var(--ldo-nested-bg);
         box-shadow: none;
       }
@@ -121,24 +549,24 @@
       html.ldo-beautification-ready .ldo-reply-context {
         display: inline-flex;
         align-items: center;
-        gap: 4px;
+        gap: 3px;
         width: fit-content;
         max-width: 100%;
-        margin: 0 10px 4px 0;
-        padding: 1px 7px;
+        margin: 0 8px 3px 0;
+        padding: 1px 6px;
         border: 1px solid var(--ldo-nested-border);
         border-radius: 6px;
         color: var(--ldo-nested-muted);
-        background: color-mix(in srgb, var(--ldo-nested-line) 7%, var(--secondary, #fff));
-        font-size: 0.78rem;
-        font-weight: 650;
-        line-height: 1.35;
+        background: transparent;
+        font-size: 0.75rem;
+        font-weight: 600;
+        line-height: 1.3;
         text-decoration: none;
       }
 
       html.ldo-beautification-ready .ldo-reply-context:hover {
-        color: var(--ldo-nested-line);
-        background: color-mix(in srgb, var(--ldo-nested-line) 12%, var(--secondary, #fff));
+        color: var(--primary, #222);
+        background: color-mix(in srgb, var(--primary, #222) 6%, transparent);
         text-decoration: none;
       }
 
@@ -209,12 +637,77 @@
       }
 
       html.ldo-beautification-ready ${TOPIC_POST_SELECTOR}.ldo-highlighted-post.ldo-nested-post > article.boxed {
-        border-left-color: var(--ldo-highlight-color);
+        box-shadow: inset 2px 0 0 var(--ldo-highlight-color);
       }
 
       html.ldo-beautification-ready .ldo-highlighted-followed .names a,
       html.ldo-beautification-ready .ldo-highlighted-followed .username a {
         color: var(--ldo-highlight-color) !important;
+      }
+
+      html.ldo-beautification-ready .ldo-followed-badge {
+        display: inline-flex;
+        align-items: center;
+        width: fit-content;
+        margin-left: 5px;
+        border: 1px solid color-mix(in srgb, var(--ldo-highlight-color) 42%, transparent);
+        border-radius: 999px;
+        padding: 0 5px;
+        color: color-mix(in srgb, var(--ldo-highlight-color) 82%, var(--primary, #222));
+        background: color-mix(in srgb, var(--ldo-highlight-color) 12%, transparent);
+        font-size: 0.65rem;
+        font-weight: 700;
+        line-height: 1.45;
+        white-space: nowrap;
+        vertical-align: middle;
+      }
+
+      html.ldo-beautification-ready .posters .ldo-followed-badge,
+      html.ldo-beautification-ready .topic-list-posters .ldo-followed-badge,
+      html.ldo-beautification-ready .topic-users .ldo-followed-badge {
+        margin-right: 3px;
+        transform: translateY(-1px);
+      }
+
+      html.ldo-beautification-ready .ldo-follow-notification {
+        --ldo-follow-notification-color: var(--ldo-highlight-color);
+        background:
+          linear-gradient(
+            90deg,
+            color-mix(in srgb, var(--ldo-follow-notification-color) 16%, transparent),
+            transparent 78%
+          ) !important;
+        box-shadow: inset 3px 0 0 var(--ldo-follow-notification-color);
+      }
+
+      html.ldo-beautification-ready .ldo-follow-notification > a {
+        background: transparent !important;
+      }
+
+      html.ldo-beautification-ready .ldo-follow-notification-topic {
+        --ldo-follow-notification-color: #40b883;
+      }
+
+      html.ldo-beautification-ready .ldo-follow-notification-reply {
+        --ldo-follow-notification-color: #5b8def;
+      }
+
+      html.ldo-beautification-ready .ldo-follow-notification-follower {
+        --ldo-follow-notification-color: #d28b3c;
+      }
+
+      html.ldo-beautification-ready .ldo-follow-notification-label {
+        display: inline-flex;
+        align-items: center;
+        margin-left: 6px;
+        border-radius: 999px;
+        padding: 1px 6px;
+        color: var(--ldo-follow-notification-color);
+        background: color-mix(in srgb, var(--ldo-follow-notification-color) 12%, transparent);
+        font-size: 0.68rem;
+        font-weight: 700;
+        line-height: 1.35;
+        white-space: nowrap;
       }
 
       .ldo-settings-backdrop {
@@ -381,13 +874,74 @@
       }
 
       @media (max-width: 760px) {
+        html.ldo-apple-ui #main-outlet {
+          padding-top: 12px;
+        }
+
+        html.ldo-apple-ui .d-header,
+        html.ldo-apple-ui .d-header .wrap {
+          min-height: 50px;
+        }
+
+        html.ldo-apple-ui .topic-list,
+        html.ldo-apple-ui .latest-topic-list {
+          border-inline: 0;
+          border-radius: 0;
+          box-shadow: none;
+        }
+
+        html.ldo-apple-ui .topic-list-item td,
+        html.ldo-apple-ui .latest-topic-list-item {
+          padding-top: 11px;
+          padding-bottom: 11px;
+        }
+
+        html.ldo-apple-ui #topic-title {
+          margin-inline: 4px;
+          padding-bottom: 10px;
+        }
+
+        html.ldo-apple-ui #topic-title h1,
+        html.ldo-apple-ui #topic-title .fancy-title {
+          font-size: 1.3rem;
+        }
+
+        html.ldo-apple-ui ${TOPIC_POST_SELECTOR}:not(.ldo-nested-post) > article.boxed {
+          border-radius: 0;
+        }
+
+        html.ldo-apple-ui ${TOPIC_POST_SELECTOR}:not(.ldo-nested-post):hover > article.boxed,
+        html.ldo-apple-ui ${TOPIC_POST_SELECTOR}:not(.ldo-nested-post):focus-within > article.boxed {
+          background: transparent;
+        }
+
+        html.ldo-apple-ui .topic-body {
+          padding-top: 14px;
+          padding-bottom: 18px;
+        }
+
+        html.ldo-apple-ui .cooked {
+          font-size: 0.98rem;
+          line-height: 1.7;
+        }
+
+        html.ldo-apple-ui .post-menu-area,
+        html.ldo-apple-ui .post-controls {
+          opacity: 1;
+        }
+
         html.ldo-beautification-ready .ldo-nested-replies {
-          margin-left: 10px;
-          padding-left: 12px;
+          margin-left: 3px;
+          padding-left: 8px;
+        }
+
+        html.ldo-beautification-ready .ldo-nested-replies > ${TOPIC_POST_SELECTOR}.ldo-nested-post::before {
+          left: -8px;
+          width: 5px;
         }
 
         html.ldo-beautification-ready ${TOPIC_POST_SELECTOR}.ldo-nested-post > article.boxed {
-          border-radius: 6px;
+          border-radius: 2px;
         }
 
         html.ldo-beautification-ready .ldo-reply-context {
@@ -453,6 +1007,420 @@
       localStorage.setItem(key, JSON.stringify(value));
     } catch {
     }
+  }
+
+  function ensureFollowedUsersForCurrentUser() {
+    const owner = getCurrentUsername();
+    if (!owner) {
+      return;
+    }
+
+    hydrateFollowedUsersFromCache(owner);
+
+    const dateKey = getLocalDateKey();
+    const record = getFollowedUsersRecord(owner);
+    if (record.lastAttemptDate === dateKey || state.followSyncPromise) {
+      return;
+    }
+
+    state.followSyncPromise = runFollowedUsersDailySync(owner, dateKey).finally(() => {
+      state.followSyncPromise = null;
+    });
+  }
+
+  async function runFollowedUsersDailySync(owner, dateKey) {
+    const lockName = `ldo-follow-sync:${owner}:${dateKey}`;
+    if (navigator.locks?.request) {
+      await navigator.locks.request(lockName, { ifAvailable: true }, async (lock) => {
+        if (!lock) {
+          scheduleFollowedUsersCacheRefresh(owner);
+          return;
+        }
+        await performFollowedUsersDailySync(owner, dateKey);
+      });
+      return;
+    }
+
+    const lockToken = acquireFollowSyncLock(owner, dateKey);
+    if (!lockToken) {
+      scheduleFollowedUsersCacheRefresh(owner);
+      return;
+    }
+
+    try {
+      await performFollowedUsersDailySync(owner, dateKey);
+    } finally {
+      releaseFollowSyncLock(lockToken);
+    }
+  }
+
+  async function performFollowedUsersDailySync(owner, dateKey) {
+    const currentRecord = getFollowedUsersRecord(owner);
+    if (currentRecord.lastAttemptDate === dateKey) {
+      if (state.followedUsersOwner === owner) {
+        hydrateFollowedUsersFromCache(owner);
+      }
+      return;
+    }
+
+    saveFollowedUsersRecord(owner, {
+      ...currentRecord,
+      lastAttemptDate: dateKey,
+    });
+
+    try {
+      const response = await fetch(`/u/${encodeURIComponent(owner)}/follow/following.json`, {
+        credentials: "include",
+        headers: {
+          Accept: "application/json",
+          "X-Requested-With": "XMLHttpRequest",
+        },
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const payload = await response.json();
+      const followedUsers = new Set(extractFollowedUsernames(payload));
+      if (state.followedUsersOwner === owner) {
+        state.followMutations.forEach((followed, username) => {
+          if (followed) {
+            followedUsers.add(username);
+          } else {
+            followedUsers.delete(username);
+          }
+        });
+      }
+
+      saveFollowedUsersRecord(owner, {
+        users: Array.from(followedUsers).sort(),
+        lastAttemptDate: dateKey,
+        lastSuccessDate: dateKey,
+        updatedAt: new Date().toISOString(),
+      });
+      if (state.followedUsersOwner === owner) {
+        state.followMutations.clear();
+        hydrateFollowedUsersFromCache(owner);
+        scheduleEnhance(0);
+      }
+    } catch {
+      if (state.followedUsersOwner === owner) {
+        hydrateFollowedUsersFromCache(owner);
+      }
+    }
+  }
+
+  function extractFollowedUsernames(payload) {
+    const users = Array.isArray(payload)
+      ? payload
+      : payload?.users || payload?.following || payload?.user_list?.users || [];
+    if (!Array.isArray(users)) {
+      return [];
+    }
+
+    return normalizeFollowedUsers(
+      users.map((user) => readValue(user, ["username", "user_name", "userName"]))
+    );
+  }
+
+  function hydrateFollowedUsersFromCache(owner) {
+    const normalizedOwner = normalizeUsername(owner);
+    if (!normalizedOwner) {
+      return;
+    }
+
+    if (state.followedUsersOwner !== normalizedOwner) {
+      state.followMutations.clear();
+    }
+    state.followedUsersOwner = normalizedOwner;
+    state.followedUsers = new Set(getFollowedUsersRecord(normalizedOwner).users);
+  }
+
+  function loadFollowedUsersCache() {
+    const cache = storageGet(FOLLOWED_USERS_CACHE_KEY, {});
+    return {
+      version: 1,
+      accounts: cache?.accounts && typeof cache.accounts === "object" ? cache.accounts : {},
+    };
+  }
+
+  function getFollowedUsersRecord(owner) {
+    const cache = loadFollowedUsersCache();
+    const record = cache.accounts[getFollowedUsersAccountKey(owner)] || {};
+    return {
+      users: normalizeFollowedUsers(record.users),
+      lastAttemptDate: String(record.lastAttemptDate || ""),
+      lastSuccessDate: String(record.lastSuccessDate || ""),
+      updatedAt: String(record.updatedAt || ""),
+    };
+  }
+
+  function saveFollowedUsersRecord(owner, record) {
+    const normalizedOwner = normalizeUsername(owner);
+    if (!normalizedOwner) {
+      return;
+    }
+
+    const cache = loadFollowedUsersCache();
+    cache.accounts[getFollowedUsersAccountKey(normalizedOwner)] = {
+      users: normalizeFollowedUsers(record.users),
+      lastAttemptDate: String(record.lastAttemptDate || ""),
+      lastSuccessDate: String(record.lastSuccessDate || ""),
+      updatedAt: String(record.updatedAt || ""),
+    };
+    storageSet(FOLLOWED_USERS_CACHE_KEY, cache);
+  }
+
+  function getFollowedUsersAccountKey(owner) {
+    return `user:${normalizeUsername(owner)}`;
+  }
+
+  function getLocalDateKey() {
+    const now = new Date();
+    return [
+      now.getFullYear(),
+      String(now.getMonth() + 1).padStart(2, "0"),
+      String(now.getDate()).padStart(2, "0"),
+    ].join("-");
+  }
+
+  function scheduleFollowedUsersCacheRefresh(owner) {
+    window.setTimeout(() => {
+      if (getCurrentUsername() === owner) {
+        hydrateFollowedUsersFromCache(owner);
+        scheduleEnhance(0);
+      }
+    }, 1_500);
+  }
+
+  function acquireFollowSyncLock(owner, dateKey) {
+    const now = Date.now();
+    const token = `${owner}:${dateKey}:${now}:${Math.random().toString(36).slice(2)}`;
+    try {
+      const activeLock = JSON.parse(localStorage.getItem(FOLLOW_SYNC_LOCK_KEY) || "null");
+      if (activeLock?.expiresAt > now) {
+        return "";
+      }
+
+      localStorage.setItem(
+        FOLLOW_SYNC_LOCK_KEY,
+        JSON.stringify({ token, expiresAt: now + FOLLOW_SYNC_LOCK_TTL_MS })
+      );
+      const confirmedLock = JSON.parse(localStorage.getItem(FOLLOW_SYNC_LOCK_KEY) || "null");
+      return confirmedLock?.token === token ? token : "";
+    } catch {
+      return token;
+    }
+  }
+
+  function releaseFollowSyncLock(token) {
+    try {
+      const activeLock = JSON.parse(localStorage.getItem(FOLLOW_SYNC_LOCK_KEY) || "null");
+      if (activeLock?.token === token) {
+        localStorage.removeItem(FOLLOW_SYNC_LOCK_KEY);
+      }
+    } catch {
+    }
+  }
+
+  function getCurrentUsername() {
+    const pageWindow = getPageWindow();
+    const candidates = [];
+    try {
+      candidates.push(pageWindow.Discourse?.User?.current?.());
+    } catch {
+    }
+
+    const container = pageWindow.Discourse?.__container__;
+    if (container?.lookup) {
+      ["service:current-user", "controller:application"].forEach((name) => {
+        try {
+          const value = container.lookup(name);
+          candidates.push(value, value?.currentUser, value?.model);
+        } catch {
+        }
+      });
+    }
+
+    for (const candidate of candidates) {
+      const username = getModelUsername(candidate);
+      if (username) {
+        return username;
+      }
+    }
+
+    const currentUserElement = document.querySelector(
+      ".d-header .current-user [data-user-card], .d-header .header-dropdown-toggle.current-user [data-user-card], #current-user [data-user-card]"
+    );
+    return getDomUsername(currentUserElement);
+  }
+
+  function handleFollowButtonClick(event) {
+    const button = event.target?.closest?.("button");
+    if (!button) {
+      return;
+    }
+
+    const userContainer = button.closest(
+      ".user-card, .user-card-container, .user-main, .user-content"
+    );
+    if (!userContainer) {
+      return;
+    }
+
+    const model = getFollowTargetModel();
+    const rawFollowed = readFirstValue(model, FOLLOWED_AUTHOR_KEYS);
+    const buttonAction = detectFollowButtonAction(button);
+    if (rawFollowed === undefined && !buttonAction) {
+      return;
+    }
+
+    const username = getFollowTargetUsername(button, model);
+    if (!username) {
+      return;
+    }
+
+    const shouldFollow =
+      rawFollowed === undefined ? buttonAction === "follow" : !toBoolean(rawFollowed);
+    window.setTimeout(() => {
+      confirmFollowStateChange({
+        username,
+        shouldFollow,
+        model,
+        container: userContainer,
+        attempt: 1,
+      });
+    }, 900);
+  }
+
+  function confirmFollowStateChange({ username, shouldFollow, model, container, attempt }) {
+    const latestModel = getFollowTargetModel(username) || model;
+    const rawFollowed = readFirstValue(latestModel, FOLLOWED_AUTHOR_KEYS);
+    if (rawFollowed !== undefined) {
+      if (toBoolean(rawFollowed) === shouldFollow) {
+        updateCachedFollowedUser(username, shouldFollow);
+      } else {
+        retryFollowStateConfirmation({ username, shouldFollow, model, container, attempt });
+      }
+      return;
+    }
+
+    const currentButton = Array.from(container?.querySelectorAll("button") || []).find((button) =>
+      detectFollowButtonAction(button)
+    );
+    const currentAction = detectFollowButtonAction(currentButton);
+    const domFollowed = currentAction === "unfollow";
+    if (currentAction && domFollowed === shouldFollow) {
+      updateCachedFollowedUser(username, shouldFollow);
+      return;
+    }
+    retryFollowStateConfirmation({ username, shouldFollow, model, container, attempt });
+  }
+
+  function retryFollowStateConfirmation(context) {
+    if (context.attempt >= 3) {
+      return;
+    }
+
+    window.setTimeout(() => {
+      confirmFollowStateChange({ ...context, attempt: context.attempt + 1 });
+    }, 700 * context.attempt);
+  }
+
+  function detectFollowButtonAction(button) {
+    if (!button) {
+      return "";
+    }
+
+    const descriptor = [
+      button.textContent,
+      button.getAttribute("aria-label"),
+      button.getAttribute("title"),
+      button.className,
+      button.querySelector("svg")?.getAttribute("class"),
+      button.querySelector(".d-icon")?.getAttribute("class"),
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    if (/user-xmark|user-times|unfollow|取消关注|停止关注/i.test(descriptor)) {
+      return "unfollow";
+    }
+    if (/user-plus|\bfollow\b|关注/i.test(descriptor)) {
+      return "follow";
+    }
+    return "";
+  }
+
+  function getFollowTargetModel(expectedUsername = "") {
+    const pageWindow = getPageWindow();
+    const container = pageWindow.Discourse?.__container__;
+    if (!container?.lookup) {
+      return null;
+    }
+
+    const normalizedExpected = normalizeUsername(expectedUsername);
+    for (const name of ["controller:user-card", "controller:user"]) {
+      try {
+        const controller = container.lookup(name);
+        for (const model of [controller?.model, controller?.user]) {
+          const username = getModelUsername(model);
+          if (username && (!normalizedExpected || username === normalizedExpected)) {
+            return model;
+          }
+        }
+      } catch {
+      }
+    }
+    return null;
+  }
+
+  function getFollowTargetUsername(button, model) {
+    const modelUsername = getModelUsername(model);
+    if (modelUsername) {
+      return modelUsername;
+    }
+
+    const container = button.closest(".user-card, .user-card-container, .user-main, .user-content");
+    const usernameElement = container?.querySelector(
+      "[data-user-card], [data-username], a[href*='/u/']"
+    );
+    const domUsername = getDomUsername(usernameElement);
+    if (domUsername) {
+      return domUsername;
+    }
+
+    const match = location.pathname.match(/^\/u\/([^/]+)/i);
+    return match ? normalizeUsername(decodeURIComponent(match[1])) : "";
+  }
+
+  function updateCachedFollowedUser(username, followed) {
+    const owner = getCurrentUsername();
+    const normalizedUsername = normalizeUsername(username);
+    if (!owner || !normalizedUsername || normalizedUsername === owner) {
+      return;
+    }
+
+    if (state.followedUsersOwner !== owner) {
+      hydrateFollowedUsersFromCache(owner);
+    }
+
+    const record = getFollowedUsersRecord(owner);
+    const followedUsers = new Set(record.users);
+    if (followed) {
+      followedUsers.add(normalizedUsername);
+    } else {
+      followedUsers.delete(normalizedUsername);
+    }
+
+    state.followMutations.set(normalizedUsername, followed);
+    state.followedUsers = followedUsers;
+    saveFollowedUsersRecord(owner, {
+      ...record,
+      users: Array.from(followedUsers).sort(),
+      updatedAt: new Date().toISOString(),
+    });
+    scheduleEnhance(0);
   }
 
   function openSettingsPanel() {
@@ -535,7 +1503,7 @@
     const hint = createElement(
       "p",
       "ldo-settings-hint",
-      "脚本会读取站点暴露的关注状态，不需要手动填写用户名。"
+      "每天首次进入网站时同步一次关注用户，之后只读取本地名单；新关注或取消关注会自动增量更新。"
     );
 
     section.append(title, enabledLabel, colorLabel, hint);
@@ -634,6 +1602,21 @@
       .filter((rule) => rule.keyword);
   }
 
+  function normalizeFollowedUsers(value) {
+    const items = Array.isArray(value) ? value : String(value || "").split(/[\n,]+/);
+    return Array.from(
+      new Set(
+        items
+          .map(normalizeUsername)
+          .filter(Boolean)
+      )
+    );
+  }
+
+  function normalizeUsername(value) {
+    return String(value || "").trim().replace(/^@/, "").toLowerCase();
+  }
+
   function normalizeColor(value, fallback) {
     return /^#[\da-f]{6}$/i.test(String(value || "")) ? value : fallback;
   }
@@ -697,15 +1680,14 @@
   }
 
   function enhancePage() {
+    ensureFollowedUsersForCurrentUser();
+
     const topicInfo = getTopicInfo();
     const topicKey = topicInfo ? topicInfo.key : "";
 
     if (topicKey !== state.lastTopicKey) {
       restoreNestedPosts();
       state.lastTopicKey = topicKey;
-      state.topicJsonKey = "";
-      state.topicJsonRelations = new Map();
-      state.topicJsonLoading = null;
     }
 
     enhanceBookmarks();
@@ -716,7 +1698,6 @@
       return;
     }
 
-    loadTopicJsonRelations(topicInfo);
     enhanceReplyNesting(topicInfo);
     enhanceHighlights();
   }
@@ -750,54 +1731,6 @@
 
   function isPostNumber(value) {
     return /^\d+$/.test(String(value || ""));
-  }
-
-  function loadTopicJsonRelations(topicInfo) {
-    if (!topicInfo || state.topicJsonKey === topicInfo.key || state.topicJsonLoading) {
-      return;
-    }
-
-    state.topicJsonLoading = fetch(`${topicInfo.basePath}.json`, {
-      credentials: "include",
-      headers: {
-        Accept: "application/json",
-      },
-    })
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-        return response.json();
-      })
-      .then((topic) => {
-        const relations = new Map();
-        const posts = Array.isArray(topic?.post_stream?.posts) ? topic.post_stream.posts : [];
-        posts.forEach((post) => {
-          const number = toNumber(post.post_number);
-          if (!number) {
-            return;
-          }
-          relations.set(number, {
-            id: post.id,
-            number,
-            parentNumber: toNumber(post.reply_to_post_number),
-            username: post.username || "",
-            bookmarked: Boolean(post.bookmarked),
-            followed: readBooleanFromKeys(post, FOLLOWED_AUTHOR_KEYS),
-          });
-        });
-
-        state.topicJsonKey = topicInfo.key;
-        state.topicJsonRelations = relations;
-      })
-      .catch(() => {
-        state.topicJsonKey = topicInfo.key;
-        state.topicJsonRelations = new Map();
-      })
-      .finally(() => {
-        state.topicJsonLoading = null;
-        scheduleEnhance(80);
-      });
   }
 
   function enhanceReplyNesting(topicInfo) {
@@ -916,7 +1849,7 @@
   }
 
   function collectPostRelations() {
-    const relations = new Map(state.topicJsonRelations);
+    const relations = new Map();
     const discoursePosts = getDiscourseLoadedPosts();
 
     discoursePosts.forEach((post) => {
@@ -942,7 +1875,83 @@
       });
     });
 
+    mergeDomPostRelations(relations);
+
     return relations;
+  }
+
+  function mergeDomPostRelations(relations) {
+    getRenderedPosts().forEach((post) => {
+      const number = getPostNumber(post);
+      if (!number) {
+        return;
+      }
+
+      const existing = relations.get(number) || {};
+      const domParentNumber = getDomReplyParentNumber(post, number);
+      relations.set(number, {
+        ...existing,
+        number,
+        parentNumber: existing.parentNumber || domParentNumber || null,
+      });
+    });
+  }
+
+  function getDomReplyParentNumber(post, postNumber) {
+    const directParentNumber =
+      toNumber(post.getAttribute("data-reply-to-post-number")) ||
+      toNumber(post.getAttribute("data-reply-to"));
+    if (directParentNumber && directParentNumber !== postNumber) {
+      return directParentNumber;
+    }
+
+    const article = post.querySelector(":scope > article");
+    const replyTarget = article?.querySelector(
+      ".reply-to-tab, .reply-to-post, .post-info.reply-to, [data-reply-to-post-number]"
+    );
+    if (!replyTarget) {
+      return null;
+    }
+
+    const candidates = [
+      replyTarget,
+      ...replyTarget.querySelectorAll("[data-reply-to-post-number], [data-post-number]"),
+    ];
+    for (const candidate of candidates) {
+      const parentNumber =
+        toNumber(candidate.getAttribute("data-reply-to-post-number")) ||
+        toNumber(candidate.getAttribute("data-post-number"));
+      if (parentNumber && parentNumber !== postNumber) {
+        return parentNumber;
+      }
+    }
+
+    const topicInfo = getTopicInfo();
+    if (!topicInfo) {
+      return null;
+    }
+
+    const links = [
+      ...(replyTarget.matches("a[href]") ? [replyTarget] : []),
+      ...replyTarget.querySelectorAll("a[href]"),
+    ];
+    for (const link of links) {
+      try {
+        const url = new URL(link.getAttribute("href"), location.href);
+        const prefix = `${topicInfo.basePath}/`;
+        if (!url.pathname.startsWith(prefix)) {
+          continue;
+        }
+
+        const parentNumber = toNumber(url.pathname.slice(prefix.length).split("/")[0]);
+        if (parentNumber && parentNumber !== postNumber) {
+          return parentNumber;
+        }
+      } catch {
+      }
+    }
+
+    return null;
   }
 
   function getDiscourseLoadedPosts() {
@@ -1030,11 +2039,13 @@
     const keywordRules = config.keywordsEnabled
       ? config.keywordRules.filter((rule) => rule.enabled !== false && rule.keyword)
       : [];
+    const followedUsers = new Set(state.followedUsers);
     const relations = collectPostRelations();
     const topicRelations = collectTopicRelations();
 
-    enhanceTopicRowHighlights(keywordRules, topicRelations);
-    enhancePostHighlights(keywordRules, relations);
+    enhanceTopicRowHighlights(keywordRules, topicRelations, followedUsers);
+    enhancePostHighlights(keywordRules, relations, followedUsers);
+    enhanceFollowNotifications();
   }
 
   function clearHighlights() {
@@ -1053,37 +2064,156 @@
       });
   }
 
-  function enhanceTopicRowHighlights(keywordRules, topicRelations) {
+  function enhanceTopicRowHighlights(keywordRules, topicRelations, followedUsers) {
     document.querySelectorAll(TOPIC_ROW_SELECTOR).forEach((row) => {
       const keywordMatch = findKeywordMatch(getTopicRowText(row), keywordRules);
-      const followedMatch = state.config.followedEnabled && isTopicRowFollowed(row, topicRelations);
+      const followedMatch = isTopicRowFollowed(row, topicRelations, followedUsers);
+      updateFollowedAuthorBadges(row, getTopicRowAuthorElements(row), followedMatch);
 
       if (keywordMatch) {
         applyHighlight(row, "topic", "keyword", keywordMatch.color, keywordMatch.keyword);
         return;
       }
 
-      if (followedMatch) {
+      if (state.config.followedEnabled && followedMatch) {
         applyHighlight(row, "topic", "followed", state.config.followedColor);
       }
     });
+
   }
 
-  function enhancePostHighlights(keywordRules, relations) {
+  function enhancePostHighlights(keywordRules, relations, followedUsers) {
     getRenderedPosts().forEach((post) => {
       const relation = relations.get(getPostNumber(post));
       const keywordMatch = findKeywordMatch(getPostText(post), keywordRules);
-      const followedMatch = state.config.followedEnabled && isPostFollowed(post, relation);
+      const followedMatch = isPostFollowed(post, relation, followedUsers);
+      const article = post.querySelector(":scope > article");
+      updateFollowedAuthorBadges(
+        article,
+        [getPostAuthorElement(post)].filter(Boolean),
+        followedMatch
+      );
 
       if (keywordMatch) {
         applyHighlight(post, "post", "keyword", keywordMatch.color, keywordMatch.keyword);
         return;
       }
 
-      if (followedMatch) {
+      if (state.config.followedEnabled && followedMatch) {
         applyHighlight(post, "post", "followed", state.config.followedColor);
       }
     });
+  }
+
+  function updateFollowedAuthorBadges(container, authorElements, followed) {
+    if (!container) {
+      return;
+    }
+
+    const targets = Array.from(new Set(authorElements.filter(Boolean)));
+    const badges = Array.from(container.querySelectorAll(".ldo-followed-badge"));
+    badges.forEach((badge) => {
+      if (!followed || !targets.includes(badge.previousElementSibling)) {
+        badge.remove();
+      }
+    });
+
+    if (!followed) {
+      return;
+    }
+
+    targets.forEach((target) => {
+      if (target.nextElementSibling?.classList?.contains("ldo-followed-badge")) {
+        return;
+      }
+
+      const badge = createElement("span", "ldo-followed-badge", "已关注");
+      const username = getDomUsername(target);
+      badge.title = username ? `已关注 @${username}` : "已关注该作者";
+      target.parentNode?.insertBefore(badge, target.nextSibling);
+    });
+  }
+
+  function enhanceFollowNotifications() {
+    const definitions = [
+      {
+        code: "801",
+        icon: "discourse-follow-new-topic",
+        className: "ldo-follow-notification-topic",
+        label: "关注用户新主题",
+      },
+      {
+        code: "802",
+        icon: "discourse-follow-new-reply",
+        className: "ldo-follow-notification-reply",
+        label: "关注用户新回复",
+      },
+      {
+        code: "800",
+        icon: "discourse-follow-new-follower",
+        className: "ldo-follow-notification-follower",
+        label: "新增关注者",
+      },
+    ];
+    const matchedItems = new Map();
+
+    definitions.forEach((definition) => {
+      const selectors = [
+        `[data-notification-type="${definition.code}"]`,
+        `[data-notification-type-id="${definition.code}"]`,
+        `.d-icon-${definition.icon}`,
+        `[href$="#${definition.icon}"]`,
+      ].join(",");
+      document.querySelectorAll(selectors).forEach((marker) => {
+        const item = getNotificationItem(marker);
+        if (item) {
+          matchedItems.set(item, definition);
+        }
+      });
+    });
+
+    document.querySelectorAll(".ldo-follow-notification").forEach((item) => {
+      if (!matchedItems.has(item)) {
+        item.classList.remove(
+          "ldo-follow-notification",
+          "ldo-follow-notification-topic",
+          "ldo-follow-notification-reply",
+          "ldo-follow-notification-follower"
+        );
+        item.querySelectorAll(".ldo-follow-notification-label").forEach((label) => label.remove());
+      }
+    });
+
+    matchedItems.forEach((definition, item) => {
+      item.classList.remove(
+        "ldo-follow-notification-topic",
+        "ldo-follow-notification-reply",
+        "ldo-follow-notification-follower"
+      );
+      item.classList.add("ldo-follow-notification", definition.className);
+
+      const labelHost =
+        item.querySelector(".notification-description, .text, .excerpt") ||
+        item.querySelector("a") ||
+        item;
+      let label = item.querySelector(".ldo-follow-notification-label");
+      if (!label) {
+        label = createElement("span", "ldo-follow-notification-label");
+        labelHost.appendChild(label);
+      }
+      if (label.textContent !== definition.label) {
+        label.textContent = definition.label;
+      }
+    });
+  }
+
+  function getNotificationItem(marker) {
+    if (marker.matches("[data-notification-type], [data-notification-type-id]")) {
+      return marker;
+    }
+    return marker.closest(
+      "[data-notification-id], .notification-list-item, .notification-item, .user-notifications-list-item, li"
+    );
   }
 
   function applyHighlight(element, target, reason, color, keyword = "") {
@@ -1114,13 +2244,79 @@
     return text || row.textContent || "";
   }
 
-  function isTopicRowFollowed(row, topicRelations) {
+  function getTopicRowAuthorUsernames(row) {
+    return Array.from(new Set(getTopicRowAuthorElements(row).map(getDomUsername).filter(Boolean)));
+  }
+
+  function getTopicRowAuthorElements(row) {
+    const posterElements = Array.from(
+      row.querySelectorAll(
+        ".posters [data-user-card], .topic-list-posters [data-user-card], .topic-users [data-user-card]"
+      )
+    );
+    if (!posterElements.length) {
+      return [];
+    }
+
+    const originalPosters = posterElements.filter((element) => {
+      const description = [
+        element.getAttribute("title"),
+        element.getAttribute("aria-label"),
+        element.getAttribute("data-title"),
+        element.className,
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return /original poster|topic owner|主题作者|楼主|原始发帖人/i.test(description);
+    });
+    return originalPosters.length ? originalPosters : posterElements.slice(0, 1);
+  }
+
+  function getPostAuthorUsername(post) {
+    return getDomUsername(getPostAuthorElement(post));
+  }
+
+  function getPostAuthorElement(post) {
+    return post.querySelector(
+      ":scope > article .names [data-user-card], :scope > article [data-user-card].trigger-user-card, :scope > article [data-username]"
+    );
+  }
+
+  function getDomUsername(element) {
+    if (!element) {
+      return "";
+    }
+
+    const directUsername =
+      element.getAttribute("data-user-card") ||
+      element.getAttribute("data-username") ||
+      element.dataset?.userCard ||
+      element.dataset?.username;
+    if (directUsername) {
+      return normalizeUsername(directUsername);
+    }
+
+    const href = element.getAttribute("href") || "";
+    const match = href.match(/\/u\/([^/?#]+)/i);
+    return match ? normalizeUsername(decodeURIComponent(match[1])) : "";
+  }
+
+  function isTopicRowFollowed(row, topicRelations, followedUsers) {
     if (readBooleanFromDom(row, FOLLOWED_AUTHOR_KEYS)) {
       return true;
     }
 
     const topicId = getTopicRowId(row);
-    return topicId ? Boolean(topicRelations.get(topicId)?.followed) : false;
+    const relation = topicId ? topicRelations.get(topicId) : null;
+    if (relation?.followed) {
+      return true;
+    }
+
+    const authorUsernames = new Set([
+      ...(relation?.authorUsernames || []),
+      ...getTopicRowAuthorUsernames(row),
+    ]);
+    return Array.from(authorUsernames).some((username) => followedUsers.has(username));
   }
 
   function getTopicRowId(row) {
@@ -1134,8 +2330,13 @@
     return match ? toNumber(match[1]) : null;
   }
 
-  function isPostFollowed(post, relation) {
-    return Boolean(relation?.followed) || readBooleanFromDom(post, FOLLOWED_AUTHOR_KEYS);
+  function isPostFollowed(post, relation, followedUsers) {
+    if (Boolean(relation?.followed) || readBooleanFromDom(post, FOLLOWED_AUTHOR_KEYS)) {
+      return true;
+    }
+
+    const username = normalizeUsername(relation?.username || getPostAuthorUsername(post));
+    return Boolean(username && followedUsers.has(username));
   }
 
   function getPostText(post) {
@@ -1152,6 +2353,7 @@
       }
       relations.set(id, {
         followed: isTopicModelFollowed(topic),
+        authorUsernames: getTopicModelAuthorUsernames(topic),
       });
     });
     return relations;
@@ -1206,12 +2408,67 @@
   }
 
   function isTopicModelFollowed(topic) {
-    if (readBooleanFromKeys(topic, FOLLOWED_AUTHOR_KEYS)) {
+    return getTopicAuthorModels(topic).some((author) =>
+      readBooleanFromKeys(author, FOLLOWED_AUTHOR_KEYS)
+    );
+  }
+
+  function getTopicModelAuthorUsernames(topic) {
+    return Array.from(
+      new Set(getTopicAuthorModels(topic).map(getModelUsername).filter(Boolean))
+    );
+  }
+
+  function getTopicAuthorModels(topic) {
+    const posters = toArray(readValue(topic, ["posters", "participants"]));
+    const originalPosters = posters.filter(isOriginalPosterModel);
+    const selectedPosters = originalPosters.length ? originalPosters : posters.slice(0, 1);
+    const directAuthors = [
+      readValue(topic, ["creator"]),
+      readValue(topic, ["original_poster", "originalPoster"]),
+      readValue(topic, ["first_poster", "firstPoster"]),
+    ].filter(Boolean);
+
+    const authors = [...directAuthors, ...selectedPosters];
+    authors.forEach((author) => {
+      const user = readValue(author, ["user", "author"]);
+      if (user) {
+        authors.push(user);
+      }
+    });
+    return Array.from(new Set(authors));
+  }
+
+  function isOriginalPosterModel(poster) {
+    if (
+      readBooleanFromKeys(poster, [
+        "original_poster",
+        "originalPoster",
+        "is_original_poster",
+        "isOriginalPoster",
+      ])
+    ) {
       return true;
     }
 
-    const posters = toArray(readValue(topic, ["posters", "participants"]));
-    return posters.some((poster) => readBooleanFromKeys(poster, FOLLOWED_AUTHOR_KEYS));
+    const description = [
+      readValue(poster, ["description"]),
+      readValue(poster, ["extras"]),
+      readValue(poster, ["title"]),
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return /original poster|topic owner|主题作者|楼主|原始发帖人/i.test(description);
+  }
+
+  function getModelUsername(model) {
+    const direct = readValue(model, ["username", "user_name", "userName"]);
+    if (direct) {
+      return normalizeUsername(direct);
+    }
+
+    const user = readValue(model, ["user", "author"]);
+    return user ? normalizeUsername(readValue(user, ["username", "user_name", "userName"])) : "";
   }
 
   function readBooleanFromDom(root, keys) {
