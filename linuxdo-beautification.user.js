@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LINUX DO Beautification
 // @namespace    https://linux.do/
-// @version      0.2.8
-// @description  LINUX DO 帖子楼中楼、书签与自定义高亮
+// @version      0.3.0
+// @description  LINUX DO Apple 风格界面、书签高亮、关注作者、代码块复制、长图折叠、引用折叠、状态徽章、悬浮快捷操作
 // @author       linuxdo-beautification-plugin
 // @match        https://linux.do/*
 // @icon         https://linux.do/favicon.ico
@@ -21,7 +21,6 @@
   const FOLLOWED_USERS_CACHE_KEY = "ldo-beautification-followed-users-v1";
   const FOLLOW_SYNC_LOCK_KEY = "ldo-beautification-follow-sync-lock";
   const FOLLOW_SYNC_LOCK_TTL_MS = 60_000;
-  const MAX_NEST_DEPTH = 3;
   const TOPIC_POST_SELECTOR = ".topic-post[data-post-number]";
   const TOPIC_ROW_SELECTOR =
     ".topic-list-item, tr[data-topic-id], .latest-topic-list-item, .category-topic-link";
@@ -37,34 +36,52 @@
     "current_user_following",
     "currentUserFollowing",
   ];
+  const DEFAULT_FEATURES = {
+    codeCopy: true,
+    longImage: true,
+    quoteCollapse: true,
+    topicBadges: true,
+    visitedFade: true,
+    floatingActions: true,
+  };
+  const FEATURE_META = [
+    { key: "codeCopy", name: "代码块复制按钮", desc: "帖子内代码块右上角显示 Apple 风格复制按钮。" },
+    { key: "longImage", name: "长图自动折叠", desc: "超过 520px 高度的图片默认折叠，点击展开。" },
+    { key: "quoteCollapse", name: "引用折叠", desc: "较长的嵌套引用默认收起，点击标题栏展开。" },
+    { key: "topicBadges", name: "主题状态徽章", desc: "已解决/置顶/精华/抽奖用彩色胶囊突出显示。" },
+    { key: "visitedFade", name: "已读主题淡化", desc: "已读过的主题标题淡化，突出未读内容。" },
+    { key: "floatingActions", name: "悬浮快捷操作", desc: "右下角显示返回顶部/底部按钮，向下滚动后出现。" },
+  ];
+  const LONG_IMAGE_MIN_HEIGHT = 520;
+  const QUOTE_COLLAPSE_MIN_HEIGHT = 220;
   const DEFAULT_CONFIG = {
     followedEnabled: true,
     followedColor: "#40b883",
     keywordsEnabled: true,
     keywordRules: [],
+    features: { ...DEFAULT_FEATURES },
   };
 
   const state = {
-    isMutating: false,
     isScheduled: false,
     config: loadConfig(),
-    lastTopicKey: "",
     followedUsers: new Set(),
     followedUsersOwner: "",
     followSyncPromise: null,
     followMutations: new Map(),
-    postPlaceholders: new WeakMap(),
-    ignoreMutationsUntil: 0,
+    floatingActionsRoot: null,
   };
 
   function start() {
     injectStyle();
     registerMenuCommands();
     patchHistory();
+    initFloatingActions();
     observePage();
     scheduleEnhance(0);
     window.addEventListener("load", () => scheduleEnhance(100));
     window.addEventListener("popstate", () => scheduleEnhance(120));
+    window.addEventListener("scroll", updateFloatingActionsVisibility, { passive: true });
     document.addEventListener("click", handleFollowButtonClick, true);
   }
 
@@ -107,10 +124,6 @@
         --ldo-apple-shadow: 0 10px 32px rgba(0, 0, 0, 0.1);
         --ldo-apple-shadow-elevated: 0 18px 48px rgba(0, 0, 0, 0.2);
         --ldo-apple-transition: 180ms cubic-bezier(0.25, 0.1, 0.25, 1);
-        --ldo-nested-line: var(--ldo-apple-separator-strong);
-        --ldo-nested-bg: var(--ldo-apple-surface-elevated);
-        --ldo-nested-border: var(--ldo-apple-separator);
-        --ldo-nested-muted: var(--primary-medium, #888);
         --ldo-bookmark-bg: color-mix(in srgb, #f2b84b 18%, transparent);
         --ldo-bookmark-bg-strong: color-mix(in srgb, #f2b84b 28%, transparent);
         --ldo-bookmark-border: #d18818;
@@ -410,7 +423,7 @@
         letter-spacing: -0.018em;
       }
 
-      html.ldo-apple-ui ${TOPIC_POST_SELECTOR}:not(.ldo-nested-post) > article.boxed {
+      html.ldo-apple-ui ${TOPIC_POST_SELECTOR} > article.boxed {
         border-bottom: 1px solid var(--ldo-apple-separator);
         border-radius: var(--ldo-apple-radius-medium);
         background: transparent;
@@ -420,8 +433,8 @@
           box-shadow var(--ldo-apple-transition);
       }
 
-      html.ldo-apple-ui ${TOPIC_POST_SELECTOR}:not(.ldo-nested-post):hover > article.boxed,
-      html.ldo-apple-ui ${TOPIC_POST_SELECTOR}:not(.ldo-nested-post):focus-within > article.boxed {
+      html.ldo-apple-ui ${TOPIC_POST_SELECTOR}:hover > article.boxed,
+      html.ldo-apple-ui ${TOPIC_POST_SELECTOR}:focus-within > article.boxed {
         background: color-mix(in srgb, var(--ldo-apple-surface-solid) 78%, transparent);
       }
 
@@ -512,68 +525,6 @@
         background: var(--ldo-apple-hover);
       }
 
-      html.ldo-beautification-ready ${TOPIC_POST_SELECTOR}.ldo-has-nested-replies > article.boxed {
-        box-shadow: none;
-      }
-
-      html.ldo-beautification-ready .ldo-nested-replies {
-        position: relative;
-        margin: 0 0 6px 6px;
-        padding: 2px 0 2px 12px;
-        border-left: 1px solid var(--ldo-nested-border);
-      }
-
-      html.ldo-beautification-ready .ldo-nested-replies > ${TOPIC_POST_SELECTOR}.ldo-nested-post::before {
-        content: "";
-        position: absolute;
-        top: 22px;
-        left: -12px;
-        width: 8px;
-        height: 1px;
-        background: var(--ldo-nested-border);
-      }
-
-      html.ldo-beautification-ready ${TOPIC_POST_SELECTOR}.ldo-nested-post {
-        position: relative;
-        margin-top: 4px;
-        margin-bottom: 4px;
-      }
-
-      html.ldo-beautification-ready ${TOPIC_POST_SELECTOR}.ldo-nested-post > article.boxed {
-        border: 0;
-        border-radius: var(--ldo-apple-radius-small, 8px);
-        background: var(--ldo-nested-bg);
-        box-shadow: none;
-      }
-
-      html.ldo-beautification-ready .ldo-reply-context {
-        display: inline-flex;
-        align-items: center;
-        gap: 3px;
-        width: fit-content;
-        max-width: 100%;
-        margin: 0 8px 3px 0;
-        padding: 1px 6px;
-        border: 1px solid var(--ldo-nested-border);
-        border-radius: 6px;
-        color: var(--ldo-nested-muted);
-        background: transparent;
-        font-size: 0.75rem;
-        font-weight: 600;
-        line-height: 1.3;
-        text-decoration: none;
-      }
-
-      html.ldo-beautification-ready .ldo-reply-context:hover {
-        color: var(--primary, #222);
-        background: color-mix(in srgb, var(--primary, #222) 6%, transparent);
-        text-decoration: none;
-      }
-
-      html.ldo-beautification-ready ${TOPIC_POST_SELECTOR}.ldo-reply-orphan > article.boxed {
-        border-left: 3px solid var(--ldo-nested-line);
-      }
-
       html.ldo-beautification-ready .topic-list-item.ldo-bookmarked-topic,
       html.ldo-beautification-ready tr.ldo-bookmarked-topic,
       html.ldo-beautification-ready .latest-topic-list-item.ldo-bookmarked-topic,
@@ -636,10 +587,6 @@
         box-shadow: inset 4px 0 0 var(--ldo-highlight-color);
       }
 
-      html.ldo-beautification-ready ${TOPIC_POST_SELECTOR}.ldo-highlighted-post.ldo-nested-post > article.boxed {
-        box-shadow: inset 2px 0 0 var(--ldo-highlight-color);
-      }
-
       html.ldo-beautification-ready .ldo-highlighted-followed .names a,
       html.ldo-beautification-ready .ldo-highlighted-followed .username a {
         color: var(--ldo-highlight-color) !important;
@@ -665,8 +612,7 @@
       html.ldo-beautification-ready .posters .ldo-followed-badge,
       html.ldo-beautification-ready .topic-list-posters .ldo-followed-badge,
       html.ldo-beautification-ready .topic-users .ldo-followed-badge {
-        margin-right: 3px;
-        transform: translateY(-1px);
+        display: none;
       }
 
       html.ldo-beautification-ready .ldo-follow-notification {
@@ -873,6 +819,307 @@
         line-height: 1.45;
       }
 
+      /* 代码块复制按钮 */
+      html.ldo-apple-ui .cooked pre {
+        position: relative;
+      }
+
+      html.ldo-apple-ui .ldo-code-copy-btn {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        z-index: 2;
+        padding: 4px 10px;
+        border: 1px solid var(--ldo-apple-separator);
+        border-radius: 999px;
+        color: var(--ldo-apple-label-secondary);
+        background: color-mix(in srgb, var(--ldo-apple-surface-solid) 82%, transparent);
+        backdrop-filter: saturate(160%) blur(10px);
+        -webkit-backdrop-filter: saturate(160%) blur(10px);
+        font-family: var(--ldo-apple-font);
+        font-size: 0.72rem;
+        font-weight: 620;
+        letter-spacing: 0.02em;
+        cursor: pointer;
+        opacity: 0;
+        transition: opacity var(--ldo-apple-transition), color var(--ldo-apple-transition),
+          border-color var(--ldo-apple-transition), background-color var(--ldo-apple-transition);
+      }
+
+      html.ldo-apple-ui .cooked pre:hover .ldo-code-copy-btn,
+      html.ldo-apple-ui .cooked pre:focus-within .ldo-code-copy-btn,
+      html.ldo-apple-ui .ldo-code-copy-btn:focus-visible {
+        opacity: 1;
+      }
+
+      html.ldo-apple-ui .ldo-code-copy-btn:hover {
+        color: var(--ldo-apple-label);
+        background: var(--ldo-apple-surface-solid);
+      }
+      html.ldo-apple-ui .ldo-code-copy-btn.ldo-copied {
+        color: #0f7a3a;
+        border-color: color-mix(in srgb, var(--ldo-apple-accent) 42%, transparent);
+        background: color-mix(in srgb, var(--ldo-apple-accent) 18%, var(--ldo-apple-surface-solid));
+      }
+
+      /* 长图折叠 */
+      html.ldo-apple-ui .cooked .ldo-long-image {
+        position: relative;
+        display: block;
+        overflow: hidden;
+        max-height: ${LONG_IMAGE_MIN_HEIGHT}px;
+        margin: 12px 0;
+        border-radius: var(--ldo-apple-radius-medium);
+        cursor: zoom-in;
+        transition: max-height var(--ldo-apple-transition);
+      }
+
+      html.ldo-apple-ui .cooked .ldo-long-image.ldo-expanded {
+        max-height: none;
+        cursor: zoom-out;
+      }
+
+      html.ldo-apple-ui .cooked .ldo-long-image > img {
+        display: block;
+        width: 100%;
+        height: auto;
+        margin: 0;
+      }
+
+      html.ldo-apple-ui .cooked .ldo-long-image::after {
+        content: attr(data-ldo-hint);
+        position: absolute;
+        inset: auto 0 0 0;
+        padding: 28px 12px 10px;
+        color: #fff;
+        font-size: 0.78rem;
+        font-weight: 620;
+        letter-spacing: 0.02em;
+        text-align: center;
+        background: linear-gradient(transparent, rgba(0, 0, 0, 0.62));
+        pointer-events: none;
+        transition: opacity var(--ldo-apple-transition);
+      }
+
+      html.ldo-apple-ui .cooked .ldo-long-image.ldo-expanded::after {
+        opacity: 0;
+      }
+
+      html.ldo-apple-ui .cooked .ldo-long-image.ldo-expanded:hover::after {
+        opacity: 1;
+      }
+      /* 引用折叠 */
+      html.ldo-apple-ui .cooked aside.quote.ldo-quote-collapsible {
+        position: relative;
+        margin: 12px 0;
+        border: 1px solid var(--ldo-apple-separator);
+        border-radius: var(--ldo-apple-radius-small);
+        background: var(--ldo-apple-surface-elevated);
+        overflow: hidden;
+      }
+
+      html.ldo-apple-ui .cooked aside.quote.ldo-quote-collapsible > .title {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        color: var(--ldo-apple-label-secondary);
+        background: color-mix(in srgb, var(--ldo-apple-surface-elevated) 60%, transparent);
+        cursor: pointer;
+        user-select: none;
+      }
+
+      html.ldo-apple-ui .cooked aside.quote.ldo-quote-collapsible > .title::after {
+        content: "▾";
+        margin-left: auto;
+        color: var(--ldo-apple-label-tertiary);
+        font-size: 0.7em;
+        transition: transform var(--ldo-apple-transition);
+      }
+
+      html.ldo-apple-ui .cooked aside.quote.ldo-quote-collapsible.ldo-quote-collapsed > .title::after {
+        transform: rotate(-90deg);
+      }
+
+      html.ldo-apple-ui .cooked aside.quote.ldo-quote-collapsible.ldo-quote-collapsed > blockquote {
+        display: none;
+      }
+
+      html.ldo-apple-ui .cooked aside.quote.ldo-quote-collapsible > blockquote {
+        margin: 0;
+        border: 0;
+        border-radius: 0;
+        padding: 10px 14px;
+        background: transparent;
+      }
+      /* 主题状态徽章 */
+      html.ldo-apple-ui .ldo-topic-badges {
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin-left: 6px;
+        vertical-align: middle;
+      }
+
+      html.ldo-apple-ui .ldo-topic-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        padding: 1px 8px;
+        border-radius: 999px;
+        font-size: 0.68rem;
+        font-weight: 640;
+        line-height: 1.5;
+        letter-spacing: 0.02em;
+        white-space: nowrap;
+      }
+
+      html.ldo-apple-ui .ldo-topic-badge-solved {
+        color: #0f7a3a;
+        background: color-mix(in srgb, #34c759 22%, transparent);
+      }
+
+      html.ldo-apple-ui .ldo-topic-badge-pinned {
+        color: #b45309;
+        background: color-mix(in srgb, #f59e0b 22%, transparent);
+      }
+
+      html.ldo-apple-ui .ldo-topic-badge-featured {
+        color: #7c3aed;
+        background: color-mix(in srgb, #a78bfa 24%, transparent);
+      }
+
+      html.ldo-apple-ui .ldo-topic-badge-giveaway {
+        color: #be185d;
+        background: color-mix(in srgb, #ec4899 22%, transparent);
+      }
+
+      html.ldo-apple-ui .ldo-topic-badge-hot {
+        color: #b91c1c;
+        background: color-mix(in srgb, #ef4444 20%, transparent);
+      }
+
+      html.ldo-apple-ui .ldo-topic-badge-closed {
+        color: var(--ldo-apple-label-secondary);
+        background: var(--ldo-apple-hover);
+      }
+
+      /* 已读主题淡化 */
+      html.ldo-apple-ui.ldo-fade-visited .topic-list-item.visited:not(.ldo-highlighted-topic):not(.ldo-bookmarked-topic) .main-link,
+      html.ldo-apple-ui.ldo-fade-visited .latest-topic-list-item.visited:not(.ldo-highlighted-topic):not(.ldo-bookmarked-topic) .main-link {
+        opacity: 0.52;
+        transition: opacity var(--ldo-apple-transition);
+      }
+
+      html.ldo-apple-ui.ldo-fade-visited .topic-list-item.visited:hover .main-link,
+      html.ldo-apple-ui.ldo-fade-visited .latest-topic-list-item.visited:hover .main-link {
+        opacity: 1;
+      }
+      /* 悬浮快捷操作 */
+      .ldo-floating-actions {
+        position: fixed;
+        right: 20px;
+        bottom: 24px;
+        z-index: 9998;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        opacity: 0;
+        transform: translateY(12px);
+        transition: opacity 220ms cubic-bezier(0.25, 0.1, 0.25, 1),
+          transform 220ms cubic-bezier(0.25, 0.1, 0.25, 1);
+        pointer-events: none;
+      }
+
+      .ldo-floating-actions.ldo-visible {
+        opacity: 1;
+        transform: translateY(0);
+        pointer-events: auto;
+      }
+
+      .ldo-floating-btn {
+        width: 42px;
+        height: 42px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+        border-radius: 50%;
+        color: var(--ldo-apple-label, #1d1d1f);
+        background: color-mix(in srgb, var(--ldo-apple-surface-solid, #fff) 82%, transparent);
+        backdrop-filter: saturate(160%) blur(16px);
+        -webkit-backdrop-filter: saturate(160%) blur(16px);
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+        cursor: pointer;
+        transition: transform 160ms cubic-bezier(0.25, 0.1, 0.25, 1),
+          background-color 160ms cubic-bezier(0.25, 0.1, 0.25, 1),
+          box-shadow 160ms cubic-bezier(0.25, 0.1, 0.25, 1);
+      }
+
+      .ldo-floating-btn:hover {
+        transform: translateY(-1px);
+        background: var(--ldo-apple-surface-solid, #fff);
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+      }
+
+      .ldo-floating-btn:active {
+        transform: translateY(0);
+      }
+
+      .ldo-floating-btn svg {
+        width: 18px;
+        height: 18px;
+        fill: currentColor;
+      }
+      /* 设置面板 - 功能开关 */
+      .ldo-feature-list {
+        display: grid;
+        gap: 4px;
+      }
+
+      .ldo-feature-row {
+        display: grid;
+        grid-template-columns: 20px 1fr;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        transition: background-color 160ms ease;
+      }
+
+      .ldo-feature-row:hover {
+        background: var(--primary-very-low, rgba(0, 0, 0, 0.04));
+      }
+
+      .ldo-feature-row input {
+        margin-top: 3px;
+      }
+
+      .ldo-feature-name {
+        font-weight: 620;
+        color: var(--primary, #222);
+      }
+
+      .ldo-feature-desc {
+        display: block;
+        margin-top: 2px;
+        color: var(--primary-medium, #777);
+        font-size: 0.78rem;
+        line-height: 1.5;
+      }
+
+      @media (max-width: 760px) {
+        .ldo-floating-actions {
+          right: 12px;
+          bottom: 16px;
+        }
+        .ldo-floating-btn {
+          width: 40px;
+          height: 40px;
+        }
+      }
+
       @media (max-width: 760px) {
         html.ldo-apple-ui #main-outlet {
           padding-top: 12px;
@@ -906,12 +1153,12 @@
           font-size: 1.3rem;
         }
 
-        html.ldo-apple-ui ${TOPIC_POST_SELECTOR}:not(.ldo-nested-post) > article.boxed {
+        html.ldo-apple-ui ${TOPIC_POST_SELECTOR} > article.boxed {
           border-radius: 0;
         }
 
-        html.ldo-apple-ui ${TOPIC_POST_SELECTOR}:not(.ldo-nested-post):hover > article.boxed,
-        html.ldo-apple-ui ${TOPIC_POST_SELECTOR}:not(.ldo-nested-post):focus-within > article.boxed {
+        html.ldo-apple-ui ${TOPIC_POST_SELECTOR}:hover > article.boxed,
+        html.ldo-apple-ui ${TOPIC_POST_SELECTOR}:focus-within > article.boxed {
           background: transparent;
         }
 
@@ -928,24 +1175,6 @@
         html.ldo-apple-ui .post-menu-area,
         html.ldo-apple-ui .post-controls {
           opacity: 1;
-        }
-
-        html.ldo-beautification-ready .ldo-nested-replies {
-          margin-left: 3px;
-          padding-left: 8px;
-        }
-
-        html.ldo-beautification-ready .ldo-nested-replies > ${TOPIC_POST_SELECTOR}.ldo-nested-post::before {
-          left: -8px;
-          width: 5px;
-        }
-
-        html.ldo-beautification-ready ${TOPIC_POST_SELECTOR}.ldo-nested-post > article.boxed {
-          border-radius: 2px;
-        }
-
-        html.ldo-beautification-ready .ldo-reply-context {
-          white-space: normal;
         }
 
         .ldo-keyword-row {
@@ -983,7 +1212,17 @@
       followedColor: normalizeColor(source.followedColor, DEFAULT_CONFIG.followedColor),
       keywordsEnabled: source.keywordsEnabled !== false,
       keywordRules: normalizeKeywordRules(source.keywordRules),
+      features: normalizeFeatures(source.features),
     };
+  }
+
+  function normalizeFeatures(value) {
+    const source = value && typeof value === "object" ? value : {};
+    const result = {};
+    Object.keys(DEFAULT_FEATURES).forEach((key) => {
+      result[key] = source[key] !== false;
+    });
+    return result;
   }
 
   function storageGet(key, fallback) {
@@ -1448,9 +1687,10 @@
     header.append(title, closeButton);
 
     const body = createElement("div", "ldo-settings-body");
+    const featureSection = createFeatureSettingsSection(draft);
     const followedSection = createFollowedSettingsSection(draft);
     const keywordSection = createKeywordSettingsSection(draft);
-    body.append(followedSection.section, keywordSection.section);
+    body.append(featureSection.section, followedSection.section, keywordSection.section);
 
     const footer = createElement("div", "ldo-settings-footer");
     const cancelButton = createElement("button", "ldo-settings-button", "取消");
@@ -1464,6 +1704,7 @@
         followedColor: followedSection.color.value,
         keywordsEnabled: keywordSection.enabled.checked,
         keywordRules: keywordSection.getRules(),
+        features: featureSection.getFeatures(),
       });
       closeDialog();
     });
@@ -1483,6 +1724,39 @@
     };
     document.addEventListener("keydown", closeOnEscape);
     document.body.appendChild(backdrop);
+  }
+
+  function createFeatureSettingsSection(config) {
+    const section = createElement("section", "ldo-settings-section");
+    const title = createElement("h3", "ldo-settings-section-title", "功能开关");
+    const list = createElement("div", "ldo-feature-list");
+    const inputs = {};
+
+    FEATURE_META.forEach(({ key, name, desc }) => {
+      const row = createElement("label", "ldo-feature-row");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = config.features[key] !== false;
+      const textWrap = document.createElement("span");
+      const nameEl = createElement("span", "ldo-feature-name", name);
+      const descEl = createElement("span", "ldo-feature-desc", desc);
+      textWrap.append(nameEl, descEl);
+      row.append(checkbox, textWrap);
+      list.appendChild(row);
+      inputs[key] = checkbox;
+    });
+
+    section.append(title, list);
+    return {
+      section,
+      getFeatures() {
+        const result = {};
+        Object.keys(inputs).forEach((key) => {
+          result[key] = inputs[key].checked;
+        });
+        return result;
+      },
+    };
   }
 
   function createFollowedSettingsSection(config) {
@@ -1644,9 +1918,6 @@
 
   function observePage() {
     const observer = new MutationObserver((mutations) => {
-      if (state.isMutating || Date.now() < state.ignoreMutationsUntil) {
-        return;
-      }
       if (
         mutations.some(
           (mutation) =>
@@ -1680,172 +1951,28 @@
   }
 
   function enhancePage() {
+    applyFeatureFlags();
     ensureFollowedUsersForCurrentUser();
-
-    const topicInfo = getTopicInfo();
-    const topicKey = topicInfo ? topicInfo.key : "";
-
-    if (topicKey !== state.lastTopicKey) {
-      restoreNestedPosts();
-      state.lastTopicKey = topicKey;
-    }
-
     enhanceBookmarks();
-
-    if (!topicInfo) {
-      restoreNestedPosts();
-      enhanceHighlights();
-      return;
-    }
-
-    enhanceReplyNesting(topicInfo);
     enhanceHighlights();
+    enhanceCodeBlocks();
+    enhanceLongImages();
+    enhanceQuotes();
+    enhanceTopicBadges();
+    updateFloatingActionsVisibility();
   }
 
-  function getTopicInfo() {
-    const parts = location.pathname.split("/").filter(Boolean);
-    if (parts[0] !== "t") {
-      return null;
-    }
-
-    if (parts.length >= 3 && isPostNumber(parts[2])) {
-      return {
-        key: parts[2],
-        id: parts[2],
-        slug: parts[1],
-        basePath: `/t/${parts[1]}/${parts[2]}`,
-      };
-    }
-
-    if (parts.length >= 2 && isPostNumber(parts[1])) {
-      return {
-        key: parts[1],
-        id: parts[1],
-        slug: "",
-        basePath: `/t/${parts[1]}`,
-      };
-    }
-
-    return null;
-  }
-
-  function isPostNumber(value) {
-    return /^\d+$/.test(String(value || ""));
-  }
-
-  function enhanceReplyNesting(topicInfo) {
-    const posts = getRenderedPosts();
-    if (!posts.length) {
-      return;
-    }
-
-    const postElements = new Map();
-    posts.forEach((post) => {
-      const number = getPostNumber(post);
-      if (number) {
-        postElements.set(number, post);
-      }
-    });
-
-    const relations = collectPostRelations();
-    if (!relations.size) {
-      return;
-    }
-
-    state.isMutating = true;
-    try {
-      posts.forEach((post) => {
-        post.classList.remove("ldo-has-nested-replies");
-      });
-
-      postElements.forEach((post, number) => {
-        const relation = relations.get(number);
-        const parentNumber = relation?.parentNumber;
-        const parentPost = parentNumber ? postElements.get(parentNumber) : null;
-
-        post.classList.toggle("ldo-bookmarked-post", Boolean(relation?.bookmarked));
-
-        if (!parentNumber || parentNumber === number) {
-          restorePostIfNested(post);
-          resetPostNestingState(post);
-          return;
-        }
-
-        if (!parentPost || wouldCreateCycle(number, parentNumber, relations)) {
-          restorePostIfNested(post);
-          markOrphanReply(post, parentNumber, topicInfo);
-          return;
-        }
-
-        movePostIntoParent(post, parentPost, parentNumber, getReplyDepth(number, relations), topicInfo);
-      });
-
-      cleanupReplyContainers();
-    } finally {
-      state.isMutating = false;
-      state.ignoreMutationsUntil = Date.now() + 250;
-    }
+  function applyFeatureFlags() {
+    document.documentElement.classList.toggle(
+      "ldo-fade-visited",
+      Boolean(state.config.features.visitedFade)
+    );
   }
 
   function getRenderedPosts() {
     return Array.from(document.querySelectorAll(TOPIC_POST_SELECTOR)).filter(
       (post) => !post.closest(".d-modal")
     );
-  }
-
-  function restorePostIfNested(post) {
-    if (!post.classList.contains("ldo-nested-post")) {
-      return;
-    }
-
-    const placeholder = state.postPlaceholders.get(post);
-    if (placeholder?.parentNode) {
-      placeholder.replaceWith(post);
-    }
-  }
-
-  function restoreNestedPosts() {
-    const nestedPosts = Array.from(document.querySelectorAll(`${TOPIC_POST_SELECTOR}.ldo-nested-post`));
-    if (!nestedPosts.length) {
-      cleanupReplyContainers();
-      return;
-    }
-
-    state.isMutating = true;
-    try {
-      nestedPosts.forEach((post) => {
-        const placeholder = state.postPlaceholders.get(post);
-        if (placeholder?.parentNode) {
-          placeholder.replaceWith(post);
-        }
-        resetPostNestingState(post);
-      });
-      cleanupReplyContainers();
-    } finally {
-      state.isMutating = false;
-      state.ignoreMutationsUntil = Date.now() + 250;
-    }
-  }
-
-  function resetPostNestingState(post) {
-    post.classList.remove("ldo-nested-post", "ldo-reply-orphan");
-    post.style.removeProperty("--ldo-depth");
-    delete post.dataset.ldoReplyTo;
-    clearReplyContext(post);
-  }
-
-  function cleanupReplyContainers() {
-    document.querySelectorAll(".ldo-nested-replies").forEach((container) => {
-      if (!container.querySelector(TOPIC_POST_SELECTOR)) {
-        container.remove();
-      }
-    });
-
-    document.querySelectorAll(`${TOPIC_POST_SELECTOR}.ldo-has-nested-replies`).forEach((post) => {
-      if (!post.querySelector(":scope > .ldo-nested-replies")) {
-        post.classList.remove("ldo-has-nested-replies");
-      }
-    });
   }
 
   function collectPostRelations() {
@@ -1859,7 +1986,6 @@
       }
 
       const existing = relations.get(number) || {};
-      const rawParentNumber = readValue(post, ["reply_to_post_number", "replyToPostNumber"]);
       const rawBookmarked = readValue(post, ["bookmarked", "isBookmarked", "bookmark_id", "bookmarkId"]);
       const rawFollowed = readFirstValue(post, FOLLOWED_AUTHOR_KEYS);
 
@@ -1867,8 +1993,6 @@
         ...existing,
         id: readValue(post, ["id"]) ?? existing.id,
         number,
-        parentNumber:
-          rawParentNumber === undefined ? existing.parentNumber || null : toNumber(rawParentNumber),
         username: readValue(post, ["username"]) || existing.username || "",
         bookmarked: rawBookmarked === undefined ? Boolean(existing.bookmarked) : Boolean(rawBookmarked),
         followed: rawFollowed === undefined ? Boolean(existing.followed) : toBoolean(rawFollowed),
@@ -1887,71 +2011,10 @@
         return;
       }
 
-      const existing = relations.get(number) || {};
-      const domParentNumber = getDomReplyParentNumber(post, number);
-      relations.set(number, {
-        ...existing,
-        number,
-        parentNumber: existing.parentNumber || domParentNumber || null,
-      });
+      if (!relations.has(number)) {
+        relations.set(number, { number });
+      }
     });
-  }
-
-  function getDomReplyParentNumber(post, postNumber) {
-    const directParentNumber =
-      toNumber(post.getAttribute("data-reply-to-post-number")) ||
-      toNumber(post.getAttribute("data-reply-to"));
-    if (directParentNumber && directParentNumber !== postNumber) {
-      return directParentNumber;
-    }
-
-    const article = post.querySelector(":scope > article");
-    const replyTarget = article?.querySelector(
-      ".reply-to-tab, .reply-to-post, .post-info.reply-to, [data-reply-to-post-number]"
-    );
-    if (!replyTarget) {
-      return null;
-    }
-
-    const candidates = [
-      replyTarget,
-      ...replyTarget.querySelectorAll("[data-reply-to-post-number], [data-post-number]"),
-    ];
-    for (const candidate of candidates) {
-      const parentNumber =
-        toNumber(candidate.getAttribute("data-reply-to-post-number")) ||
-        toNumber(candidate.getAttribute("data-post-number"));
-      if (parentNumber && parentNumber !== postNumber) {
-        return parentNumber;
-      }
-    }
-
-    const topicInfo = getTopicInfo();
-    if (!topicInfo) {
-      return null;
-    }
-
-    const links = [
-      ...(replyTarget.matches("a[href]") ? [replyTarget] : []),
-      ...replyTarget.querySelectorAll("a[href]"),
-    ];
-    for (const link of links) {
-      try {
-        const url = new URL(link.getAttribute("href"), location.href);
-        const prefix = `${topicInfo.basePath}/`;
-        if (!url.pathname.startsWith(prefix)) {
-          continue;
-        }
-
-        const parentNumber = toNumber(url.pathname.slice(prefix.length).split("/")[0]);
-        if (parentNumber && parentNumber !== postNumber) {
-          return parentNumber;
-        }
-      } catch {
-      }
-    }
-
-    return null;
   }
 
   function getDiscourseLoadedPosts() {
@@ -2497,101 +2560,6 @@
     return `data-${String(key).replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`).replace(/_/g, "-")}`;
   }
 
-  function movePostIntoParent(post, parentPost, parentNumber, depth, topicInfo) {
-    const container = ensureReplyContainer(parentPost);
-
-    if (post.parentElement !== container) {
-      let placeholder = state.postPlaceholders.get(post);
-      if ((!placeholder || !placeholder.parentNode) && !post.classList.contains("ldo-nested-post")) {
-        placeholder = document.createComment(`ldo-beautification-post-${getPostNumber(post)}`);
-        post.parentNode.insertBefore(placeholder, post);
-        state.postPlaceholders.set(post, placeholder);
-      }
-
-      container.appendChild(post);
-    }
-
-    post.classList.add("ldo-nested-post");
-    post.classList.remove("ldo-reply-orphan");
-    post.style.setProperty("--ldo-depth", String(Math.min(depth, MAX_NEST_DEPTH)));
-    post.dataset.ldoReplyTo = String(parentNumber);
-    parentPost.classList.add("ldo-has-nested-replies");
-    ensureReplyContext(post, parentNumber, topicInfo);
-  }
-
-  function ensureReplyContainer(parentPost) {
-    const existing = Array.from(parentPost.children).find((child) =>
-      child.classList?.contains("ldo-nested-replies")
-    );
-    if (existing) {
-      return existing;
-    }
-
-    const container = document.createElement("div");
-    container.className = "ldo-nested-replies";
-    parentPost.appendChild(container);
-    return container;
-  }
-
-  function ensureReplyContext(post, parentNumber, topicInfo) {
-    const body = post.querySelector(".topic-meta-data") || post.querySelector(".post__body") || post;
-    let context = post.querySelector(":scope .ldo-reply-context");
-    if (!context) {
-      context = document.createElement("a");
-      context.className = "ldo-reply-context";
-      body.insertBefore(context, body.firstChild);
-    }
-
-    context.href = `${topicInfo.basePath}/${parentNumber}`;
-    context.textContent = `回复 #${parentNumber}`;
-    context.title = `跳转到 #${parentNumber}`;
-  }
-
-  function clearReplyContext(post) {
-    post.querySelectorAll(":scope .ldo-reply-context").forEach((context) => context.remove());
-  }
-
-  function markOrphanReply(post, parentNumber, topicInfo) {
-    post.classList.add("ldo-reply-orphan");
-    post.classList.remove("ldo-nested-post");
-    post.style.removeProperty("--ldo-depth");
-    post.dataset.ldoReplyTo = String(parentNumber);
-    ensureReplyContext(post, parentNumber, topicInfo);
-  }
-
-  function getReplyDepth(number, relations) {
-    let depth = 0;
-    let current = number;
-    const seen = new Set();
-
-    while (depth < MAX_NEST_DEPTH) {
-      const parentNumber = relations.get(current)?.parentNumber;
-      if (!parentNumber || seen.has(parentNumber)) {
-        break;
-      }
-      seen.add(parentNumber);
-      depth += 1;
-      current = parentNumber;
-    }
-
-    return Math.max(depth, 1);
-  }
-
-  function wouldCreateCycle(number, parentNumber, relations) {
-    let current = parentNumber;
-    const seen = new Set([number]);
-
-    while (current) {
-      if (seen.has(current)) {
-        return true;
-      }
-      seen.add(current);
-      current = relations.get(current)?.parentNumber;
-    }
-
-    return false;
-  }
-
   function getPostNumber(post) {
     return toNumber(post?.dataset?.postNumber);
   }
@@ -2668,6 +2636,301 @@
       const post = document.querySelector(`${TOPIC_POST_SELECTOR}[data-post-number="${number}"]`);
       post?.classList.add("ldo-bookmarked-post");
     });
+  }
+
+  const SVG_ARROW_UP =
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5l7 7-1.4 1.4L13 8.8V19h-2V8.8L6.4 13.4 5 12z"/></svg>';
+  const SVG_ARROW_DOWN =
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19l-7-7 1.4-1.4L11 15.2V5h2v10.2l4.6-4.6L19 12z"/></svg>';
+
+  function enhanceCodeBlocks() {
+    if (!state.config.features.codeCopy) {
+      document.querySelectorAll(".ldo-code-copy-btn").forEach((btn) => btn.remove());
+      document.querySelectorAll("[data-ldo-code-copy]").forEach((pre) => delete pre.dataset.ldoCodeCopy);
+      return;
+    }
+
+    document.querySelectorAll(".cooked pre").forEach((pre) => {
+      if (pre.dataset.ldoCodeCopy === "1") {
+        return;
+      }
+      pre.dataset.ldoCodeCopy = "1";
+      const button = createElement("button", "ldo-code-copy-btn", "复制");
+      button.type = "button";
+      button.setAttribute("aria-label", "复制代码");
+      button.addEventListener("click", (event) => handleCodeCopyClick(event, pre, button));
+      pre.appendChild(button);
+    });
+  }
+
+  async function handleCodeCopyClick(event, pre, button) {
+    event.stopPropagation();
+    event.preventDefault();
+    const source = pre.querySelector("code") || pre;
+    const text = source.innerText || source.textContent || "";
+    const succeeded = await copyTextToClipboard(text);
+    button.classList.toggle("ldo-copied", succeeded);
+    button.textContent = succeeded ? "已复制" : "复制失败";
+    window.clearTimeout(button.__ldoResetTimer);
+    button.__ldoResetTimer = window.setTimeout(() => {
+      button.classList.remove("ldo-copied");
+      button.textContent = "复制";
+    }, 1600);
+  }
+
+  async function copyTextToClipboard(text) {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {
+    }
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "true");
+      textarea.style.position = "fixed";
+      textarea.style.top = "-9999px";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      const succeeded = document.execCommand("copy");
+      textarea.remove();
+      return succeeded;
+    } catch {
+      return false;
+    }
+  }
+
+  function enhanceLongImages() {
+    if (!state.config.features.longImage) {
+      document.querySelectorAll(".ldo-long-image").forEach((wrapper) => {
+        const img = wrapper.querySelector("img");
+        if (img && wrapper.parentNode) {
+          wrapper.parentNode.insertBefore(img, wrapper);
+        }
+        wrapper.remove();
+      });
+      document.querySelectorAll("img[data-ldo-long-image]").forEach((img) => {
+        delete img.dataset.ldoLongImage;
+      });
+      return;
+    }
+
+    document
+      .querySelectorAll(".cooked img:not(.emoji):not(.d-emoji):not(.avatar):not([data-ldo-long-image])")
+      .forEach((img) => {
+        if (img.closest(".ldo-long-image") || img.closest("a.lightbox")) {
+          return;
+        }
+        img.dataset.ldoLongImage = "1";
+        if (img.complete && img.naturalHeight) {
+          tryWrapLongImage(img);
+        } else {
+          img.addEventListener("load", () => tryWrapLongImage(img), { once: true });
+        }
+      });
+  }
+
+  function tryWrapLongImage(img) {
+    if (!img.isConnected || img.naturalHeight <= LONG_IMAGE_MIN_HEIGHT) {
+      return;
+    }
+    const parent = img.parentElement;
+    if (!parent || parent.classList.contains("ldo-long-image")) {
+      return;
+    }
+    const wrapper = document.createElement("span");
+    wrapper.className = "ldo-long-image";
+    wrapper.dataset.ldoHint = "点击展开长图";
+    parent.insertBefore(wrapper, img);
+    wrapper.appendChild(img);
+    wrapper.addEventListener("click", (event) => {
+      if (event.metaKey || event.ctrlKey || event.shiftKey) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      const expanded = wrapper.classList.toggle("ldo-expanded");
+      wrapper.dataset.ldoHint = expanded ? "点击收起" : "点击展开长图";
+    });
+  }
+
+  function enhanceQuotes() {
+    if (!state.config.features.quoteCollapse) {
+      document.querySelectorAll("aside.quote.ldo-quote-collapsible").forEach((quote) => {
+        quote.classList.remove("ldo-quote-collapsible", "ldo-quote-collapsed");
+        delete quote.dataset.ldoQuote;
+      });
+      return;
+    }
+
+    document.querySelectorAll(".cooked aside.quote").forEach((quote) => {
+      if (quote.dataset.ldoQuote === "1") {
+        return;
+      }
+      const title = quote.querySelector(":scope > .title");
+      const blockquote = quote.querySelector(":scope > blockquote");
+      if (!title || !blockquote) {
+        return;
+      }
+      quote.dataset.ldoQuote = "1";
+      quote.classList.add("ldo-quote-collapsible");
+      const nested = quote.parentElement?.closest("aside.quote");
+      const isLong = blockquote.offsetHeight > QUOTE_COLLAPSE_MIN_HEIGHT;
+      if (nested || isLong) {
+        quote.classList.add("ldo-quote-collapsed");
+      }
+      title.addEventListener("click", (event) => {
+        if (!quote.classList.contains("ldo-quote-collapsible")) {
+          return;
+        }
+        if (event.target.closest(".quote-controls")) {
+          return;
+        }
+        quote.classList.toggle("ldo-quote-collapsed");
+      });
+    });
+  }
+
+  function enhanceTopicBadges() {
+    const enabled = state.config.features.topicBadges;
+    document.querySelectorAll(".topic-list-item, .latest-topic-list-item, .category-topic-link").forEach((row) => {
+      const badges = enabled ? detectTopicBadges(row) : [];
+      applyTopicBadges(row, badges);
+    });
+  }
+
+  function detectTopicBadges(row) {
+    const badges = [];
+    const kinds = new Set();
+    const add = (kind, label) => {
+      if (kinds.has(kind)) {
+        return;
+      }
+      kinds.add(kind);
+      badges.push({ kind, label });
+    };
+
+    if (
+      row.matches(".status-solved, .accepted-answer, [data-topic-solved='true']") ||
+      row.querySelector(
+        ".topic-status .d-icon-square-check, .topic-status .d-icon-check-square, .topic-status .d-icon-circle-check, .topic-statuses .d-icon-square-check"
+      )
+    ) {
+      add("solved", "已解决");
+    }
+
+    if (row.matches(".pinned") || row.querySelector(".topic-status .d-icon-thumbtack")) {
+      add("pinned", "置顶");
+    }
+
+    if (
+      row.matches(".closed, .archived") ||
+      row.querySelector(".topic-status .d-icon-lock, .topic-status .d-icon-envelope")
+    ) {
+      add("closed", "已关闭");
+    }
+
+    row.querySelectorAll(".discourse-tag").forEach((tag) => {
+      const name = (tag.getAttribute("data-tag-name") || tag.textContent || "").trim();
+      if (!name) {
+        return;
+      }
+      if (/精华|feature|essence/i.test(name)) {
+        add("featured", "精华");
+      }
+      if (/抽奖|giveaway|lottery|福利/i.test(name)) {
+        add("giveaway", "抽奖");
+      }
+      if (/^hot$|热门|热议/i.test(name)) {
+        add("hot", "热门");
+      }
+    });
+
+    return badges;
+  }
+
+  function applyTopicBadges(row, badges) {
+    const container = row.querySelector(":scope .ldo-topic-badges");
+    const key = badges.map((b) => b.kind).join(",");
+
+    if (!badges.length) {
+      container?.remove();
+      return;
+    }
+
+    const anchor =
+      row.querySelector(":scope .main-link .title") ||
+      row.querySelector(":scope a.title") ||
+      row.querySelector(":scope .main-link a[href*='/t/']");
+    if (!anchor) {
+      return;
+    }
+
+    let host = container;
+    if (!host) {
+      host = createElement("span", "ldo-topic-badges");
+      anchor.after(host);
+    }
+
+    if (host.dataset.ldoBadgeKey === key) {
+      return;
+    }
+    host.dataset.ldoBadgeKey = key;
+    host.textContent = "";
+    badges.forEach(({ kind, label }) => {
+      host.appendChild(createElement("span", `ldo-topic-badge ldo-topic-badge-${kind}`, label));
+    });
+  }
+
+  function initFloatingActions() {
+    if (state.floatingActionsRoot || !document.body) {
+      return;
+    }
+    const container = createElement("div", "ldo-floating-actions");
+    container.setAttribute("aria-hidden", "true");
+
+    const topBtn = createFloatingButton("回到顶部", SVG_ARROW_UP);
+    topBtn.addEventListener("click", () => {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+
+    const bottomBtn = createFloatingButton("回到底部", SVG_ARROW_DOWN);
+    bottomBtn.addEventListener("click", () => {
+      const target = Math.max(
+        document.documentElement.scrollHeight,
+        document.body.scrollHeight
+      );
+      window.scrollTo({ top: target, behavior: "smooth" });
+    });
+
+    container.append(topBtn, bottomBtn);
+    document.body.appendChild(container);
+    state.floatingActionsRoot = container;
+  }
+
+  function createFloatingButton(label, svg) {
+    const button = createElement("button", "ldo-floating-btn");
+    button.type = "button";
+    button.setAttribute("aria-label", label);
+    button.title = label;
+    button.innerHTML = svg;
+    return button;
+  }
+
+  function updateFloatingActionsVisibility() {
+    const container = state.floatingActionsRoot;
+    if (!container) {
+      return;
+    }
+    if (!state.config.features.floatingActions) {
+      container.classList.remove("ldo-visible");
+      return;
+    }
+    const shouldShow = window.scrollY > 320;
+    container.classList.toggle("ldo-visible", shouldShow);
   }
 
   if (document.readyState === "loading") {
