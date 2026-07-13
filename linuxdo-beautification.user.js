@@ -617,17 +617,7 @@
 
       html.ldo-beautification-ready .ldo-follow-notification {
         --ldo-follow-notification-color: var(--ldo-highlight-color);
-        background:
-          linear-gradient(
-            90deg,
-            color-mix(in srgb, var(--ldo-follow-notification-color) 16%, transparent),
-            transparent 78%
-          ) !important;
-        box-shadow: inset 3px 0 0 var(--ldo-follow-notification-color);
-      }
-
-      html.ldo-beautification-ready .ldo-follow-notification > a {
-        background: transparent !important;
+        box-shadow: inset 2px 0 0 var(--ldo-follow-notification-color);
       }
 
       html.ldo-beautification-ready .ldo-follow-notification-topic {
@@ -643,16 +633,12 @@
       }
 
       html.ldo-beautification-ready .ldo-follow-notification-label {
-        display: inline-flex;
-        align-items: center;
-        margin-left: 6px;
-        border-radius: 999px;
-        padding: 1px 6px;
+        display: inline;
+        margin-left: 4px;
         color: var(--ldo-follow-notification-color);
-        background: color-mix(in srgb, var(--ldo-follow-notification-color) 12%, transparent);
-        font-size: 0.68rem;
-        font-weight: 700;
-        line-height: 1.35;
+        font-size: 0.6rem;
+        font-weight: 600;
+        opacity: 0.8;
         white-space: nowrap;
       }
 
@@ -2248,6 +2234,9 @@
     });
 
     matchedItems.forEach((definition, item) => {
+      if (item.classList.contains(definition.className)) {
+        return;
+      }
       item.classList.remove(
         "ldo-follow-notification-topic",
         "ldo-follow-notification-reply",
