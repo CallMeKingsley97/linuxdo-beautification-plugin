@@ -7,3 +7,4 @@ __pycache__/
 *.key
 /dist/
 /tests/*
+!/tests/keyword-highlight-scope.test.js

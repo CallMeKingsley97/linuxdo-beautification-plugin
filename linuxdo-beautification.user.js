@@ -1816,7 +1816,7 @@
     }
     addButton.addEventListener("click", () => renderRule({ keyword: "", color: "#ffd166", enabled: true }));
 
-    const hint = createElement("p", "ldo-settings-hint", "关键词会匹配主题标题和帖子内容，不区分大小写。");
+    const hint = createElement("p", "ldo-settings-hint", "关键词仅匹配主题标题，不区分大小写。");
 
     section.append(title, enabledLabel, list, addButton, hint);
     return {
@@ -2093,7 +2093,7 @@
     const topicRelations = collectTopicRelations();
 
     enhanceTopicRowHighlights(keywordRules, topicRelations, followedUsers);
-    enhancePostHighlights(keywordRules, relations, followedUsers);
+    enhancePostHighlights(relations, followedUsers);
     enhanceFollowNotifications();
   }
 
@@ -2115,7 +2115,7 @@
 
   function enhanceTopicRowHighlights(keywordRules, topicRelations, followedUsers) {
     document.querySelectorAll(TOPIC_ROW_SELECTOR).forEach((row) => {
-      const keywordMatch = findKeywordMatch(getTopicRowText(row), keywordRules);
+      const keywordMatch = findKeywordMatch(getTopicRowTitleText(row), keywordRules);
       const followedMatch = isTopicRowFollowed(row, topicRelations, followedUsers);
       updateFollowedAuthorBadges(row, getTopicRowAuthorElements(row), followedMatch);
 
@@ -2131,10 +2131,9 @@
 
   }
 
-  function enhancePostHighlights(keywordRules, relations, followedUsers) {
+  function enhancePostHighlights(relations, followedUsers) {
     getRenderedPosts().forEach((post) => {
       const relation = relations.get(getPostNumber(post));
-      const keywordMatch = findKeywordMatch(getPostText(post), keywordRules);
       const followedMatch = isPostFollowed(post, relation, followedUsers);
       const article = post.querySelector(":scope > article");
       updateFollowedAuthorBadges(
@@ -2142,11 +2141,6 @@
         [getPostAuthorElement(post)].filter(Boolean),
         followedMatch
       );
-
-      if (keywordMatch) {
-        applyHighlight(post, "post", "keyword", keywordMatch.color, keywordMatch.keyword);
-        return;
-      }
 
       if (state.config.followedEnabled && followedMatch) {
         applyHighlight(post, "post", "followed", state.config.followedColor);
@@ -2287,13 +2281,13 @@
     return keywordRules.find((rule) => haystack.includes(rule.keyword.toLowerCase())) || null;
   }
 
-  function getTopicRowText(row) {
-    const titleElements = row.querySelectorAll("a.title, .title a, .main-link a[href*='/t/'], a[href*='/t/']");
-    const text = Array.from(titleElements)
-      .map((element) => element.textContent.trim())
-      .filter(Boolean)
-      .join(" ");
-    return text || row.textContent || "";
+  function getTopicRowTitleText(row) {
+    const titleElement = row.matches("a.title[href*='/t/'], a.category-topic-link[href*='/t/']")
+      ? row
+      : row.querySelector(
+          "a.title[href*='/t/'], .title a[href*='/t/'], .main-link > a[href*='/t/'], .link-top-line > a[href*='/t/'], .category-topic-link > a[href*='/t/']"
+        );
+    return titleElement?.textContent?.trim() || "";
   }
 
   function getTopicRowAuthorUsernames(row) {
@@ -2389,11 +2383,6 @@
 
     const username = normalizeUsername(relation?.username || getPostAuthorUsername(post));
     return Boolean(username && followedUsers.has(username));
-  }
-
-  function getPostText(post) {
-    const content = post.querySelector(".cooked") || post.querySelector(".post__body") || post;
-    return content.textContent || "";
   }
 
   function collectTopicRelations() {
