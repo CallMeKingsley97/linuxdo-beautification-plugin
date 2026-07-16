@@ -38,3 +38,18 @@
 - 阅读体验：长帖目录、只看楼主、快速跳转指定楼层。
 - 交互效率：自动展开被折叠回复。
 - 夜间模式微调：为深色主题单独优化书签标识颜色。
+
+## macOS 原生阅读器（开发中）
+
+同仓另有 SwiftUI 桌面端工程，与油猴脚本**双轨并行**：
+
+| 项 | 说明 |
+|---|---|
+| 目录 | [`macos-reader/`](./macos-reader/) |
+| 进度 | [`macos-reader/ROADMAP.md`](./macos-reader/ROADMAP.md) |
+| 方案 | [`LINUXDO_macOS_SwiftUI_阅读器方案.md`](./LINUXDO_macOS_SwiftUI_阅读器方案.md) |
+| 当前阶段 | P1 匿名读帖（最新/热门列表 + 主题详情） |
+| 运行环境 | **仅 Mac + Xcode 15+**（Windows 无法编译） |
+
+在 Mac 上打开 `macos-reader/LINUXDOReader.xcodeproj` 后 ⌘R 即可运行（需能访问 linux.do）。
+
