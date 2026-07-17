@@ -7,54 +7,84 @@ import AppKit
 
 struct PostCardView: View {
     let post: PostItem
+    let onOpenTopic: ((Int) -> Void)?
+    let onReply: ((PostItem) -> Void)?
+    @State private var isHovering = false
+
+    init(
+        post: PostItem,
+        onOpenTopic: ((Int) -> Void)? = nil,
+        onReply: ((PostItem) -> Void)? = nil
+    ) {
+        self.post = post
+        self.onOpenTopic = onOpenTopic
+        self.onReply = onReply
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                AvatarView(template: post.avatarTemplate, size: 36)
+        HStack(alignment: .top, spacing: 12) {
+            AvatarView(template: post.avatarTemplate, size: 36)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(post.name?.isEmpty == false ? post.name! : post.username)
-                            .font(.subheadline.weight(.semibold))
-                        Text("@\(post.username)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        if post.acceptedAnswer {
-                            Text("已采纳")
-                                .font(.caption2.weight(.bold))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.green.opacity(0.15))
-                                .foregroundStyle(.green)
-                                .clipShape(Capsule())
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 6) {
+                            Text(post.name?.isEmpty == false ? post.name! : post.username)
+                                .font(.subheadline.weight(.semibold))
+                            if let name = post.name, !name.isEmpty, name != post.username {
+                                Text("@\(post.username)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if post.acceptedAnswer {
+                                LDOStatusBadge(text: "已采纳", color: .green, systemImage: "checkmark")
+                            }
                         }
+
+                        HStack(spacing: 7) {
+                            Text("#\(post.postNumber)")
+                                .monospacedDigit()
+                            if let createdAt = post.createdAt {
+                                Text(createdAt.formatted(date: .abbreviated, time: .shortened))
+                            }
+                            if let replyTo = post.replyToPostNumber {
+                                Label("回复 #\(replyTo)", systemImage: "arrowshape.turn.up.left")
+                            }
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                     }
-                    HStack(spacing: 8) {
-                        Text("#\(post.postNumber)")
-                        if let createdAt = post.createdAt {
-                            Text(createdAt.formatted(date: .abbreviated, time: .shortened))
+
+                    Spacer(minLength: 8)
+                    if let onReply {
+                        Button {
+                            onReply(post)
+                        } label: {
+                            Label("回复", systemImage: "arrowshape.turn.up.left")
+                                .labelStyle(.iconOnly)
                         }
-                        if let replyTo = post.replyToPostNumber {
-                            Text("回复 #\(replyTo)")
-                        }
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+                        .opacity(isHovering ? 1 : 0.55)
+                        .help("回复 #\(post.postNumber)")
                     }
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
                 }
-                Spacer()
-            }
 
-            CookedHTMLView(html: post.cookedHTML)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                CookedHTMLView(html: post.cookedHTML, onOpenTopic: onOpenTopic)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
-        .padding(14)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
-        )
+        .padding(.horizontal, 24)
+        .padding(.vertical, 18)
+        .background(rowBackground)
+        .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: isHovering)
+    }
+
+    private var rowBackground: Color {
+        if post.acceptedAnswer { return Color.green.opacity(0.055) }
+        if isHovering { return Color.primary.opacity(0.025) }
+        return .clear
     }
 }
-

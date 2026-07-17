@@ -8,52 +8,59 @@ struct TopicRowView: View {
     let topic: TopicSummary
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                if topic.pinned {
-                    Image(systemName: "pin.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    if topic.pinned {
+                        Image(systemName: "pin.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
+                    if topic.closed {
+                        Image(systemName: "lock.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(topic.title)
+                        .font(.body.weight(.semibold))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
                 }
-                if topic.closed {
-                    Image(systemName: "lock.fill")
+                Spacer(minLength: 6)
+                if let activityDate {
+                    Text(activityDate.ldoRelativeDescription)
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .fixedSize()
                 }
-                Text(topic.title)
-                    .font(.body.weight(.medium))
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
             }
 
-            HStack(spacing: 10) {
-                Label("\(topic.replyCount)", systemImage: "bubble.right")
-                Label("\(topic.views)", systemImage: "eye")
+            HStack(spacing: 12) {
+                LDOMetric(value: topic.replyCount, systemImage: "bubble.right", help: "回复")
+                if topic.views > 0 {
+                    LDOMetric(value: topic.views, systemImage: "eye", help: "浏览")
+                }
                 if topic.likeCount > 0 {
-                    Label("\(topic.likeCount)", systemImage: "heart")
+                    LDOMetric(value: topic.likeCount, systemImage: "heart", help: "赞")
                 }
                 Spacer(minLength: 4)
                 if let user = topic.lastPosterUsername {
-                    Text(user)
+                    Label(user, systemImage: "person.crop.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .labelStyle(.titleAndIcon)
                         .lineLimit(1)
                 }
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .labelStyle(.titleAndIcon)
 
             if !topic.tags.isEmpty {
                 HStack(spacing: 4) {
-                    ForEach(topic.tags.prefix(4), id: \.self) { tag in
-                        Text(tag)
-                            .font(.caption2)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.secondary.opacity(0.12))
-                            .clipShape(Capsule())
+                    ForEach(topic.tags.prefix(3), id: \.self) { tag in
+                        LDOTag(text: tag)
                     }
-                    if topic.tags.count > 4 {
-                        Text("+\(topic.tags.count - 4)")
+                    if topic.tags.count > 3 {
+                        Text("+\(topic.tags.count - 3)")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -62,5 +69,9 @@ struct TopicRowView: View {
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
+    }
+
+    private var activityDate: Date? {
+        topic.bumpedAt ?? topic.lastPostedAt ?? topic.createdAt
     }
 }

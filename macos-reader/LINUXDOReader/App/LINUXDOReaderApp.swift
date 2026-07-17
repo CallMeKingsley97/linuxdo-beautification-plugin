@@ -13,8 +13,11 @@ struct LINUXDOReaderApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(appState)
-                .frame(minWidth: 960, minHeight: 640)
+                .frame(minWidth: 1040, minHeight: 680)
         }
+        .defaultSize(width: 1320, height: 840)
+        .windowToolbarStyle(UnifiedWindowToolbarStyle(showsTitle: false))
+        .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandMenu("浏览") {

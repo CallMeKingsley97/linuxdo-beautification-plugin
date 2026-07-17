@@ -39,17 +39,22 @@ struct TopicListPage {
     static func from(latest dto: LatestJSON) -> TopicListPage {
         let users = Dictionary(uniqueKeysWithValues: (dto.users ?? []).map { ($0.id, UserSummary.from($0)) })
         let topics = (dto.topicList?.topics ?? []).map { TopicSummary.from(dto: $0, users: users) }
-        let hasMore: Bool = {
-            if let more = dto.topicList?.moreTopicsURL, !more.isEmpty {
-                return true
-            }
-            return !topics.isEmpty
-        }()
+        let hasMore = dto.topicList?.moreTopicsURL?.isEmpty == false
         return TopicListPage(
             topics: topics,
             usersByID: users,
             canCreateTopic: dto.topicList?.canCreateTopic ?? false,
             hasMore: hasMore
+        )
+    }
+
+    static func from(rss feed: RSSFeed) -> TopicListPage {
+        let topics = feed.items.compactMap(TopicSummary.from)
+        return TopicListPage(
+            topics: topics,
+            usersByID: [:],
+            canCreateTopic: false,
+            hasMore: false
         )
     }
 }
@@ -101,26 +106,88 @@ struct TopicDetail: Identifiable, Hashable {
     let archived: Bool
     let pinned: Bool
     let posts: [PostItem]
+    let postStreamIDs: [Int]
     let chunkSize: Int?
     let deletedBy: String?
 
-    static func from(dto: TopicDetailJSON) -> TopicDetail {
-        let posts = (dto.postStream?.posts ?? []).map { PostItem.from(dto: $0, topicID: dto.id) }
+    static func from(dto: TopicDetailJSON, posts postDTOs: [PostJSON]? = nil) -> TopicDetail {
+        let posts = (postDTOs ?? dto.postStream?.posts ?? [])
+            .map { PostItem.from(dto: $0, topicID: dto.id) }
+            .sorted { $0.postNumber < $1.postNumber }
         return TopicDetail(
             id: dto.id,
             title: dto.title ?? "无标题",
             slug: dto.slug ?? "",
             postsCount: dto.postsCount ?? posts.count,
             categoryID: dto.categoryID,
-            tags: dto.tags ?? [],
+            tags: dto.tags?.map(\.name).filter { !$0.isEmpty } ?? [],
             closed: dto.closed ?? false,
             archived: dto.archived ?? false,
             pinned: dto.pinned ?? false,
             posts: posts,
+            postStreamIDs: dto.postStream?.stream ?? posts.map(\.id),
             chunkSize: dto.chunkSize,
             deletedBy: dto.details?.deletedBy?.username
         )
     }
+
+    static func from(rss feed: RSSFeed, topicID: Int) throws -> TopicDetail {
+        let posts = feed.items.compactMap { PostItem.from(rss: $0, topicID: topicID) }
+            .sorted { $0.postNumber < $1.postNumber }
+        guard !posts.isEmpty else {
+            throw LDOError.decoding("主题 RSS 中没有可显示的楼层")
+        }
+
+        return TopicDetail(
+            id: topicID,
+            title: feed.title.isEmpty ? posts[0].cookedHTML : feed.title,
+            slug: "topic",
+            postsCount: posts.count,
+            categoryID: CategorySummary.rssCatalog.first { $0.name == feed.category }?.id,
+            tags: feed.category.map { [$0] } ?? [],
+            closed: false,
+            archived: false,
+            pinned: false,
+            posts: posts,
+            postStreamIDs: posts.map(\.id),
+            chunkSize: posts.count,
+            deletedBy: nil
+        )
+    }
+
+    var remainingPostIDs: [Int] {
+        let loaded = Set(posts.map(\.id))
+        return postStreamIDs.filter { !loaded.contains($0) }
+    }
+
+    func merging(posts newPosts: [PostItem]) -> TopicDetail {
+        var byID = Dictionary(uniqueKeysWithValues: posts.map { ($0.id, $0) })
+        for post in newPosts {
+            byID[post.id] = post
+        }
+        let merged = byID.values.sorted { $0.postNumber < $1.postNumber }
+        let highestPostNumber = merged.map(\.postNumber).max() ?? 0
+        return TopicDetail(
+            id: id,
+            title: title,
+            slug: slug,
+            postsCount: max(postsCount, highestPostNumber),
+            categoryID: categoryID,
+            tags: tags,
+            closed: closed,
+            archived: archived,
+            pinned: pinned,
+            posts: merged,
+            postStreamIDs: postStreamIDs,
+            chunkSize: chunkSize,
+            deletedBy: deletedBy
+        )
+    }
+}
+
+struct ReplyOutcome {
+    let post: PostItem?
+    let pending: Bool
 }
 
 extension TopicSummary {
@@ -147,7 +214,7 @@ extension TopicSummary {
             views: dto.views ?? 0,
             likeCount: dto.likeCount ?? 0,
             categoryID: dto.categoryID,
-            tags: dto.tags ?? [],
+            tags: dto.tags?.map(\.name).filter { !$0.isEmpty } ?? [],
             createdAt: dto.createdAt,
             lastPostedAt: dto.lastPostedAt,
             bumpedAt: dto.bumpedAt,
@@ -158,6 +225,34 @@ extension TopicSummary {
             excerpt: dto.excerpt,
             lastPosterUsername: lastPoster,
             posterUsernames: posterNames
+        )
+    }
+
+    static func from(rss item: RSSFeedItem) -> TopicSummary? {
+        guard let id = RSSIdentifier.topicID(guid: item.guid, link: item.link) else {
+            return nil
+        }
+        let postsCount = RSSIdentifier.postsCount(in: item.html) ?? 1
+        return TopicSummary(
+            id: id,
+            title: item.title.isEmpty ? "无标题" : item.title,
+            slug: "topic",
+            postsCount: postsCount,
+            replyCount: max(postsCount - 1, 0),
+            views: 0,
+            likeCount: 0,
+            categoryID: CategorySummary.rssCatalog.first { $0.name == item.category }?.id,
+            tags: item.category.map { [$0] } ?? [],
+            createdAt: item.publishedAt,
+            lastPostedAt: item.publishedAt,
+            bumpedAt: item.publishedAt,
+            pinned: item.pinned,
+            closed: item.closed,
+            archived: item.archived,
+            visible: true,
+            excerpt: nil,
+            lastPosterUsername: item.creator.isEmpty ? nil : item.creator,
+            posterUsernames: item.creator.isEmpty ? [] : [item.creator]
         )
     }
 }
@@ -178,6 +273,80 @@ extension PostItem {
             postType: dto.postType,
             acceptedAnswer: dto.acceptedAnswer ?? false
         )
+    }
+
+    static func from(rss item: RSSFeedItem, topicID: Int) -> PostItem? {
+        guard let postNumber = RSSIdentifier.postNumber(guid: item.guid, link: item.link) else {
+            return nil
+        }
+        return PostItem(
+            id: RSSIdentifier.syntheticPostID(topicID: topicID, postNumber: postNumber),
+            topicID: topicID,
+            postNumber: postNumber,
+            username: item.creator.isEmpty ? "unknown" : item.creator,
+            name: nil,
+            userID: nil,
+            avatarTemplate: nil,
+            createdAt: item.publishedAt,
+            cookedHTML: RSSHTML.cleanedPostBody(item.html),
+            replyToPostNumber: nil,
+            postType: 1,
+            acceptedAnswer: false
+        )
+    }
+}
+
+private enum RSSHTML {
+    static func cleanedPostBody(_ html: String) -> String {
+        let pattern = #"\s*<p><a href="https://linux\.do/t/[^"]+">(?:阅读完整话题|Read full topic)</a></p>\s*$"#
+        guard let expression = try? NSRegularExpression(
+            pattern: pattern,
+            options: [.caseInsensitive]
+        ) else {
+            return html
+        }
+        let range = NSRange(html.startIndex..., in: html)
+        return expression.stringByReplacingMatches(in: html, range: range, withTemplate: "")
+    }
+}
+
+private enum RSSIdentifier {
+    static func topicID(guid: String, link: String) -> Int? {
+        if guid.hasPrefix("linux.do-topic-"),
+           let value = Int(guid.dropFirst("linux.do-topic-".count)) {
+            return value
+        }
+        return numericPathComponents(link).first
+    }
+
+    static func postNumber(guid: String, link: String) -> Int? {
+        if guid.hasPrefix("linux.do-post-"),
+           let value = guid.split(separator: "-").last.flatMap({ Int($0) }) {
+            return value
+        }
+        return numericPathComponents(link).dropFirst().first
+    }
+
+    static func postsCount(in html: String) -> Int? {
+        let pattern = #"(\d+)\s*(?:个帖子|posts?)"#
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = expression.firstMatch(
+                in: html,
+                range: NSRange(html.startIndex..., in: html)
+              ),
+              let range = Range(match.range(at: 1), in: html) else {
+            return nil
+        }
+        return Int(html[range])
+    }
+
+    static func syntheticPostID(topicID: Int, postNumber: Int) -> Int {
+        topicID &* 100_000 &+ postNumber
+    }
+
+    private static func numericPathComponents(_ rawURL: String) -> [Int] {
+        guard let url = URL(string: rawURL) else { return [] }
+        return url.pathComponents.compactMap(Int.init)
     }
 }
 
@@ -216,7 +385,7 @@ struct TopicJSON: Decodable {
     let archived: Bool?
     let bookmarked: Bool?
     let liked: Bool?
-    let tags: [String]?
+    let tags: [TopicTagJSON]?
     let views: Int?
     let likeCount: Int?
     let categoryID: Int?
@@ -262,7 +431,7 @@ struct TopicDetailJSON: Decodable {
     let deletedAt: Date?
     let userID: Int?
     let pinned: Bool?
-    let tags: [String]?
+    let tags: [TopicTagJSON]?
     let chunkSize: Int?
     let postStream: PostStreamJSON?
     let details: TopicDetailsJSON?
@@ -309,4 +478,40 @@ struct TopicDetailsJSON: Decodable {
     let createdBy: UserJSON?
     let lastPoster: UserJSON?
     let deletedBy: UserJSON?
+}
+
+struct TopicTagJSON: Decodable {
+    let name: String
+
+    init(from decoder: Decoder) throws {
+        let single = try decoder.singleValueContainer()
+        if let value = try? single.decode(String.self) {
+            name = value
+            return
+        }
+        if let value = try? single.decode(Int.self) {
+            name = String(value)
+            return
+        }
+
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let value = try container.decodeIfPresent(String.self, forKey: .name), !value.isEmpty {
+            name = value
+        } else if let value = try container.decodeIfPresent(String.self, forKey: .slug), !value.isEmpty {
+            name = value
+        } else {
+            name = ""
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name, slug
+    }
+}
+
+struct CreatePostResponseJSON: Decodable {
+    let action: String?
+    let success: Bool?
+    let post: PostJSON?
+    let pendingPost: PostJSON?
 }

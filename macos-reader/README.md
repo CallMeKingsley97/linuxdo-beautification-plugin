@@ -7,27 +7,31 @@
 |---|---|
 | 工程 | `LINUXDOReader.xcodeproj` |
 | 最低系统 | macOS 14 Sonoma |
-| 当前版本 | **0.2.0 · P2 分类浏览** |
+| 当前版本 | **0.6.1 · macOS 原生视觉系统 + 图片渲染修复** |
 | 进度 | 见 [ROADMAP.md](./ROADMAP.md) |
+| UI 标准 | [../AGENTS.md](../AGENTS.md) 的 `macos-reader UI 设计标准` |
 | 总方案 | [../LINUXDO_macOS_SwiftUI_阅读器方案.md](../LINUXDO_macOS_SwiftUI_阅读器方案.md) |
 
 ---
 
-## P1 能做什么
+## 当前能做什么
 
 - 三栏布局：侧栏（最新 / 热门）→ 主题列表 → 主题详情
-- 拉公开 API：`/latest.json`、`/hot.json`、`/t/{id}.json`
+- 统一 macOS 原生视觉系统：系统材质侧栏、Mail 风格列表、连续文档式楼层流、原生工具栏与状态栏
+- 在 App 内完成 LINUX DO 网页登录；仅 linux.do 域会话 Cookie 加密保存在 macOS 钥匙串，用于跨启动恢复
+- 登录后通过常驻同源 WKWebView 执行 Discourse JSON `fetch`，原生显示完整列表和等级受限主题
+- 未登录或会话请求宿主不可用时，公开阅读回退官方 RSS
 - 正文用 WKWebView 渲染 Discourse `cooked` HTML
+- 长帖按 20 层原生分页加载，不跳外部浏览器
+- 原生回复主题或指定楼层；CSRF 与 Cookie 均由 WebKit 同源请求处理
 - 加载中 / 失败重试 / 手动刷新（⌘R）
-- 在浏览器打开当前主题
 - 请求去重 + 短时缓存（RequestGate）
-- 侧栏分类（/categories.json）与分类主题列表
-- 列表底部「加载更多」分页
+- 侧栏使用已核验的公开分类目录，并读取分类 RSS
 
-## P1 明确不做
+## 当前尚未完成
 
-- 登录、通知、回复、书签写入
-- 分类树、搜索、长帖分窗
+- 通知、书签、表情回应、已读进度
+- 搜索、跳楼、只看楼主、子分类树
 - 关注高亮等油猴对齐能力（P5）
 - App Store / Sparkle 分发（P6）
 
@@ -69,19 +73,24 @@ macos-reader/
     ├── Models/                # 领域模型 + JSON DTO
     ├── Network/               # APIClient、端点、RequestGate、错误
     ├── ViewModels/            # 列表 / 详情
-    ├── Views/                 # SwiftUI + WKWebView
+    ├── Views/                 # SwiftUI + WKWebView；Components/DesignSystem.swift 为视觉基线
     └── Resources/             # Assets
 ```
 
 ---
 
-## 架构约定（P1）
+## 会话与网络架构
 
 1. **Base URL**：`https://linux.do`  
-2. **User-Agent**：`LINUXDOReader/0.1.0 (macOS; third-party; not-affiliated)`  
-3. **无私有轮询**：只在用户打开 / 刷新时请求  
-4. **失败不自动连环重试**：UI 点「重试」  
-5. **关于页声明非官方**
+2. **登录**：使用 `WKWebsiteDataStore.default()`；App 不保存账号密码
+3. **会话恢复**：仅将 linux.do 域 Cookie 序列化后加密保存在 macOS Keychain，启动时先恢复到 WebKit Cookie Store
+4. **原生请求**：在同源请求 WKWebView 中执行 `fetch`；Cookie 仅由 WebKit 自动携带
+5. **写请求**：每次从 `/session/csrf.json` 取得 CSRF，再提交 `/posts`
+6. **隐私边界**：Cookie 不显示、不记录、不导出；清除登录数据时同步删除 WebKit 站点数据与 Keychain 会话
+7. **匿名回退**：公开列表和主题仍可通过官方 RSS 阅读
+8. **参考实现**：网络桥思路参考 MIT 开源项目 [ArkDO](https://github.com/EnjoySR/ArkDO)，macOS 端为独立 Swift/WebKit 实现
+
+LINUX DO 当前禁用了 Discourse User API Key 发布，因此本项目不再走 User API Key 授权方案。Keychain 只用于保存 App 内网页登录已产生的 linux.do 会话 Cookie。
 
 ---
 
@@ -89,9 +98,9 @@ macos-reader/
 
 | 阶段 | 内容 |
 |---|---|
-| P2 | 分类、分页、跳楼层 |
-| P3 | User API Key 登录 + Keychain |
-| P4 | 通知 / 回复 / 书签 |
+| P2 | 搜索、跳楼层、只看楼主、子分类 |
+| P3 | WebKit 登录会话完善、注销与账号页 |
+| P4 | 通知 / 书签 / 表情回应 / 已读进度 |
 | P5 | 关注高亮、关键词等与油猴对齐 |
 | P6 | Developer ID 签名、公证、Sparkle |
 
@@ -99,5 +108,6 @@ macos-reader/
 
 ## 开发机说明
 
-当前仓库可能在 Windows 上维护源码与文档；**真机编译、User API 授权 POC、Gatekeeper 分发** 必须在 Mac 完成。跑通 P1 后，请在 `ROADMAP.md` 的迭代记录里勾选「Mac 编译通过」。
+真机验证环境：macOS 15.7.7、Xcode 26.3。已验证登录用户识别、受限主题原生打开、4,120 层主题分页从 20 层增至 40 层，以及主题/指定楼层回复编辑器（未发送测试内容）。使用 `SIGKILL` 强制退出后重新启动，Keychain 会话可自动恢复 `kingsley9527`，无需再次登录。
 
+所有后续 UI 修改必须遵循仓库根目录 [AGENTS.md](../AGENTS.md) 中的 macOS 原生设计标准，并优先复用 `Views/Components/DesignSystem.swift`。

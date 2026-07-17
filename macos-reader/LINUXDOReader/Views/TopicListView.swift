@@ -12,7 +12,8 @@ struct TopicListView: View {
     var body: some View {
         Group {
             switch viewModel.phase {
-            case .idle, .loading where viewModel.topics.isEmpty:
+            case .idle where viewModel.topics.isEmpty,
+                 .loading where viewModel.topics.isEmpty:
                 LoadingPane(message: "正在加载\(selection.title)…")
             case .failed(let message) where viewModel.topics.isEmpty:
                 ErrorPane(message: message) {
@@ -57,7 +58,10 @@ struct TopicListView: View {
             ForEach(viewModel.topics) { topic in
                 TopicRowView(topic: topic)
                     .tag(topic.id)
-                    .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+                    .listRowInsets(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
+                    .listRowSeparator(.visible)
+                    .listRowSeparatorTint(LDOTheme.separator)
+                    .listRowBackground(Color.clear)
             }
 
             if viewModel.hasMore || isLoadingMore {
@@ -66,17 +70,12 @@ struct TopicListView: View {
                 }
             }
         }
-        .listStyle(.inset(alternatesRowBackgrounds: true))
-        .overlay(alignment: .bottom) {
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(LDOTheme.contentBackground)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             if let updated = viewModel.lastUpdated {
-                Text("更新于 \(updated.formatted(date: .omitted, time: .shortened)) · 共 \(viewModel.topics.count) 条")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(.bar)
-                    .clipShape(Capsule())
-                    .padding(.bottom, 8)
+                statusBar(updated: updated)
             }
         }
     }
@@ -97,14 +96,31 @@ struct TopicListView: View {
             }
             .padding(.vertical, 8)
         } else {
-            Button {
-                viewModel.loadMore()
-            } label: {
-                Text("加载更多")
-                    .frame(maxWidth: .infinity)
+            HStack {
+                Spacer()
+                Button("加载更多") {
+                    viewModel.loadMore()
+                }
+                .buttonStyle(.bordered)
+                Spacer()
             }
-            .buttonStyle(.borderless)
             .padding(.vertical, 6)
         }
+    }
+
+    private func statusBar(updated: Date) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "clock")
+            Text("更新于 \(updated.formatted(date: .omitted, time: .shortened))")
+            Spacer()
+            Text("\(viewModel.topics.count.formatted()) 个主题")
+                .monospacedDigit()
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 12)
+        .frame(height: 28)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
     }
 }

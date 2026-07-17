@@ -24,7 +24,7 @@ actor RequestGate {
         force: Bool,
         operation: @escaping @Sendable () async throws -> Data
     ) async throws -> Data {
-        if !force, let ttl, let entry = cache[key], entry.expiresAt > Date() {
+        if !force, ttl != nil, let entry = cache[key], entry.expiresAt > Date() {
             return entry.data
         }
 

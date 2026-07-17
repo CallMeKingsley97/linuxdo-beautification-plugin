@@ -27,6 +27,48 @@ enum Endpoints {
         baseURL.appendingPathComponent("t/\(id).json")
     }
 
+    static func topicPosts(id: Int, postIDs: [Int]) -> URL {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("t/\(id)/posts.json"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = postIDs.map {
+            URLQueryItem(name: "post_ids[]", value: String($0))
+        } + [URLQueryItem(name: "include_suggested", value: "false")]
+        return components.url!
+    }
+
+    static func topicPage(id: Int, slug: String? = nil) -> URL {
+        if let slug, !slug.isEmpty, slug != "topic" {
+            return baseURL.appendingPathComponent("t/\(slug)/\(id)")
+        }
+        return baseURL.appendingPathComponent("t/\(id)")
+    }
+
+    static func login() -> URL {
+        baseURL.appendingPathComponent("login")
+    }
+
+    static func sessionCSRF() -> URL {
+        baseURL.appendingPathComponent("session/csrf.json")
+    }
+
+    static func latestRSS() -> URL {
+        baseURL.appendingPathComponent("latest.rss")
+    }
+
+    static func hotRSS() -> URL {
+        baseURL.appendingPathComponent("hot.rss")
+    }
+
+    static func categoryRSS(slug: String, id: Int) -> URL {
+        baseURL.appendingPathComponent("c/\(slug)/\(id).rss")
+    }
+
+    static func topicRSS(id: Int) -> URL {
+        baseURL.appendingPathComponent("t/topic/\(id).rss")
+    }
+
     static func avatarURL(template: String, size: Int = 64) -> URL? {
         let path = template.replacingOccurrences(of: "{size}", with: String(size))
         if path.hasPrefix("http://") || path.hasPrefix("https://") {

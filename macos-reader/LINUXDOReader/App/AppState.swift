@@ -10,12 +10,14 @@ import SwiftUI
 enum BrowseSelection: Hashable, Identifiable {
     case latest
     case hot
+    case site
     case category(CategorySummary)
 
     var id: String {
         switch self {
         case .latest: return "feed-latest"
         case .hot: return "feed-hot"
+        case .site: return "site-full"
         case .category(let category): return "category-\(category.id)"
         }
     }
@@ -24,6 +26,7 @@ enum BrowseSelection: Hashable, Identifiable {
         switch self {
         case .latest: return "最新"
         case .hot: return "热门"
+        case .site: return "登录与验证"
         case .category(let category): return category.name
         }
     }
@@ -32,6 +35,7 @@ enum BrowseSelection: Hashable, Identifiable {
         switch self {
         case .latest: return "clock"
         case .hot: return "flame"
+        case .site: return "person.crop.circle.badge.checkmark"
         case .category: return "folder"
         }
     }
@@ -43,15 +47,19 @@ final class AppState: ObservableObject {
     let listViewModel: TopicListViewModel
     let detailViewModel: TopicDetailViewModel
     let categoryStore: CategoryStore
+    let siteSession: SiteSessionStore
 
     @Published var selection: BrowseSelection = .latest
     @Published var selectedTopicID: Int?
 
-    init(apiClient: APIClient = APIClient()) {
-        self.apiClient = apiClient
-        self.listViewModel = TopicListViewModel(api: apiClient)
-        self.detailViewModel = TopicDetailViewModel(api: apiClient)
-        self.categoryStore = CategoryStore(api: apiClient)
+    init() {
+        let siteSession = SiteSessionStore()
+        let client = APIClient(siteSession: siteSession)
+        self.apiClient = client
+        self.listViewModel = TopicListViewModel(api: client)
+        self.detailViewModel = TopicDetailViewModel(api: client)
+        self.categoryStore = CategoryStore(api: client)
+        self.siteSession = siteSession
     }
 
     func select(_ destination: BrowseSelection) {
@@ -75,6 +83,29 @@ final class AppState: ObservableObject {
     }
 
     func refreshList() {
+        if selection == .site {
+            siteSession.reload()
+            return
+        }
+        listViewModel.refresh(force: true)
+        if selectedTopicID != nil {
+            detailViewModel.reload()
+        }
+    }
+
+    func openTopicInSite(id: Int, slug: String? = nil) {
+        siteSession.loadTopic(id: id, slug: slug)
+        select(.site)
+    }
+
+    func openLogin() {
+        siteSession.loadLogin()
+        select(.site)
+    }
+
+    func sessionDidChange() {
+        apiClient.invalidateCaches()
+        guard selection != .site else { return }
         listViewModel.refresh(force: true)
         if selectedTopicID != nil {
             detailViewModel.reload()

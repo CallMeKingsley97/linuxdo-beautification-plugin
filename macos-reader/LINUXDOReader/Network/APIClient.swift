@@ -1,35 +1,39 @@
 //
 //  APIClient.swift
+//  登录后通过同源 WKWebView fetch 访问 Discourse JSON；匿名或桥不可用时回退 RSS。
 //
 
 import Foundation
 
-final class APIClient: @unchecked Sendable {
-    static let appUserAgent = "LINUXDOReader/0.1.0 (macOS; third-party; not-affiliated)"
+@MainActor
+final class APIClient {
+    nonisolated static let appUserAgent = "LINUXDOReader/0.5.0 (macOS; WebKit session; third-party; not-affiliated)"
 
-    private let session: URLSession
+    private let siteSession: SiteSessionStore
+    private let rssSession: URLSession
     private let decoder: JSONDecoder
+    private let encoder: JSONEncoder
     private let gate = RequestGate()
 
-    /// 列表成功缓存 TTL（秒）
     var listTTL: TimeInterval = 60
-    /// 详情成功缓存 TTL（秒）
     var detailTTL: TimeInterval = 45
-    /// 分类列表缓存 TTL（秒）
     var categoryTTL: TimeInterval = 300
 
-    init(session: URLSession? = nil) {
+    init(siteSession: SiteSessionStore, session: URLSession? = nil) {
+        self.siteSession = siteSession
+
         if let session {
-            self.session = session
+            self.rssSession = session
         } else {
-            let config = URLSessionConfiguration.default
-            config.timeoutIntervalForRequest = 30
-            config.timeoutIntervalForResource = 60
-            config.httpAdditionalHeaders = [
+            let configuration = URLSessionConfiguration.default
+            configuration.timeoutIntervalForRequest = 30
+            configuration.timeoutIntervalForResource = 60
+            configuration.httpAdditionalHeaders = [
                 "User-Agent": Self.appUserAgent,
-                "Accept": "application/json",
+                "Accept": "application/rss+xml, application/xml;q=0.9",
+                "Accept-Encoding": "identity",
             ]
-            self.session = URLSession(configuration: config)
+            self.rssSession = URLSession(configuration: configuration)
         }
 
         let decoder = JSONDecoder()
@@ -47,60 +51,197 @@ final class APIClient: @unchecked Sendable {
             )
         }
         self.decoder = decoder
+
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        self.encoder = encoder
     }
 
     func fetchLatest(page: Int = 0, force: Bool = false) async throws -> TopicListPage {
-        let url = Endpoints.latest(page: page)
-        let dto: LatestJSON = try await get(url: url, ttl: listTTL, force: force)
-        return TopicListPage.from(latest: dto)
-    }
-
-    func fetchHot(page: Int = 0, force: Bool = false) async throws -> TopicListPage {
-        let url = Endpoints.hot(page: page)
-        let dto: LatestJSON = try await get(url: url, ttl: listTTL, force: force)
-        return TopicListPage.from(latest: dto)
-    }
-
-    func fetchCategoryTopics(slug: String, id: Int, page: Int = 0, force: Bool = false) async throws -> TopicListPage {
-        let url = Endpoints.category(slug: slug, id: id, page: page)
-        let dto: LatestJSON = try await get(url: url, ttl: listTTL, force: force)
-        return TopicListPage.from(latest: dto)
-    }
-
-    func fetchCategories(force: Bool = false) async throws -> [CategorySummary] {
-        let url = Endpoints.categories()
-        let dto: CategoriesJSON = try await get(url: url, ttl: categoryTTL, force: force)
-        let list = (dto.categoryList?.categories ?? []).map(CategorySummary.from)
-        return list.sorted { lhs, rhs in
-            if lhs.position != rhs.position { return lhs.position < rhs.position }
-            return lhs.id < rhs.id
+        do {
+            let dto: LatestJSON = try await getJSON(
+                url: Endpoints.latest(page: page),
+                ttl: listTTL,
+                force: force
+            )
+            return TopicListPage.from(latest: dto)
+        } catch {
+            try requireFallbackAllowed(error)
+            let feed = try await fetchFeed(url: Endpoints.latestRSS(), ttl: listTTL, force: force)
+            return TopicListPage.from(rss: feed)
         }
     }
 
-    func fetchTopic(id: Int, force: Bool = false) async throws -> TopicDetail {
-        let url = Endpoints.topic(id: id)
-        let dto: TopicDetailJSON = try await get(url: url, ttl: detailTTL, force: force)
-        return TopicDetail.from(dto: dto)
+    func fetchHot(page: Int = 0, force: Bool = false) async throws -> TopicListPage {
+        do {
+            let dto: LatestJSON = try await getJSON(
+                url: Endpoints.hot(page: page),
+                ttl: listTTL,
+                force: force
+            )
+            return TopicListPage.from(latest: dto)
+        } catch {
+            try requireFallbackAllowed(error)
+            let feed = try await fetchFeed(url: Endpoints.hotRSS(), ttl: listTTL, force: force)
+            return TopicListPage.from(rss: feed)
+        }
     }
 
-    private func get<T: Decodable>(url: URL, ttl: TimeInterval?, force: Bool) async throws -> T {
-        let key = url.absoluteString
+    func fetchCategoryTopics(
+        slug: String,
+        id: Int,
+        page: Int = 0,
+        force: Bool = false
+    ) async throws -> TopicListPage {
         do {
-            let data = try await gate.data(forKey: key, ttl: ttl, force: force) { [session] in
+            let dto: LatestJSON = try await getJSON(
+                url: Endpoints.category(slug: slug, id: id, page: page),
+                ttl: listTTL,
+                force: force
+            )
+            return TopicListPage.from(latest: dto)
+        } catch {
+            try requireFallbackAllowed(error)
+            let feed = try await fetchFeed(
+                url: Endpoints.categoryRSS(slug: slug, id: id),
+                ttl: listTTL,
+                force: force
+            )
+            return TopicListPage.from(rss: feed)
+        }
+    }
+
+    func fetchCategories(force: Bool = false) async throws -> [CategorySummary] {
+        CategorySummary.rssCatalog
+    }
+
+    func fetchTopic(id: Int, force: Bool = false) async throws -> TopicDetail {
+        do {
+            let dto: TopicDetailJSON = try await getJSON(
+                url: Endpoints.topic(id: id),
+                ttl: detailTTL,
+                force: force
+            )
+            return TopicDetail.from(dto: dto)
+        } catch {
+            try requireFallbackAllowed(error)
+            let feed = try await fetchFeed(
+                url: Endpoints.topicRSS(id: id),
+                ttl: detailTTL,
+                force: force
+            )
+            return try TopicDetail.from(rss: feed, topicID: id)
+        }
+    }
+
+    func fetchPosts(topicID: Int, postIDs: [Int]) async throws -> [PostItem] {
+        guard !postIDs.isEmpty else { return [] }
+        let dto: TopicDetailJSON = try await getJSON(
+            url: Endpoints.topicPosts(id: topicID, postIDs: postIDs),
+            ttl: nil,
+            force: true
+        )
+        return (dto.postStream?.posts ?? [])
+            .map { PostItem.from(dto: $0, topicID: topicID) }
+            .sorted { $0.postNumber < $1.postNumber }
+    }
+
+    func createReply(
+        topicID: Int,
+        categoryID: Int?,
+        raw: String,
+        replyToPostNumber: Int?
+    ) async throws -> ReplyOutcome {
+        let payload = CreateReplyPayload(
+            raw: raw,
+            unlistTopic: false,
+            topicID: topicID,
+            category: categoryID,
+            replyToPostNumber: replyToPostNumber,
+            isWarning: false,
+            whisper: false,
+            archetype: "regular",
+            typingDurationMsecs: 0,
+            composerOpenDurationMsecs: 0,
+            composerVersion: 1,
+            tags: [],
+            featuredLink: nil,
+            sharedDraft: false,
+            draftKey: "topic_\(topicID)",
+            locale: "",
+            imageSizes: [:],
+            nestedPost: true
+        )
+        let body = try encoder.encode(payload)
+        let data = try await siteSession.requestJSON(
+            path: "/posts",
+            method: "POST",
+            body: body,
+            referrer: Endpoints.topicPage(id: topicID).absoluteString
+        )
+
+        do {
+            let response = try decoder.decode(CreatePostResponseJSON.self, from: data)
+            if let post = response.post {
+                return ReplyOutcome(
+                    post: PostItem.from(dto: post, topicID: topicID),
+                    pending: false
+                )
+            }
+            if response.action == "enqueued" || response.pendingPost != nil {
+                return ReplyOutcome(post: nil, pending: true)
+            }
+            throw LDOError.decoding("回复响应中缺少楼层数据")
+        } catch let error as LDOError {
+            throw error
+        } catch {
+            throw LDOError.decoding(error.localizedDescription)
+        }
+    }
+
+    func invalidateCaches() {
+        Task { await gate.invalidateAll() }
+    }
+
+    private func getJSON<T: Decodable>(
+        url: URL,
+        ttl: TimeInterval?,
+        force: Bool
+    ) async throws -> T {
+        let key = "webkit:\(url.absoluteString)"
+        let path = url.path + (url.query.map { "?\($0)" } ?? "")
+        let session = siteSession
+        let data = try await gate.data(forKey: key, ttl: ttl, force: force) {
+            try await session.requestJSON(path: path)
+        }
+        do {
+            return try decoder.decode(T.self, from: data)
+        } catch {
+            #if DEBUG
+            print("[LINUXDOReader][JSON] decode failed url=\(url.absoluteString) error=\(String(reflecting: error))")
+            #endif
+            throw LDOError.decoding(error.localizedDescription)
+        }
+    }
+
+    private func fetchFeed(url: URL, ttl: TimeInterval?, force: Bool) async throws -> RSSFeed {
+        let key = "rss:\(url.absoluteString)"
+        do {
+            let data = try await gate.data(forKey: key, ttl: ttl, force: force) { [rssSession] in
                 var request = URLRequest(url: url)
                 request.httpMethod = "GET"
                 request.setValue(Self.appUserAgent, forHTTPHeaderField: "User-Agent")
-                request.setValue("application/json", forHTTPHeaderField: "Accept")
+                request.setValue(
+                    "application/rss+xml, application/xml;q=0.9",
+                    forHTTPHeaderField: "Accept"
+                )
+                request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
 
-                let (data, response) = try await session.data(for: request)
-                try Self.validate(response: response, data: data)
+                let (data, response) = try await rssSession.data(for: request)
+                try Self.validateRSS(response: response, data: data)
                 return data
             }
-            do {
-                return try decoder.decode(T.self, from: data)
-            } catch {
-                throw LDOError.decoding(error.localizedDescription)
-            }
+            return try RSSFeedParser.parse(data)
         } catch let error as LDOError {
             throw error
         } catch let error as URLError where error.code == .cancelled {
@@ -112,7 +253,13 @@ final class APIClient: @unchecked Sendable {
         }
     }
 
-    private static func validate(response: URLResponse, data: Data) throws {
+    private func requireFallbackAllowed(_ error: Error) throws {
+        if siteSession.isLoggedIn {
+            throw error
+        }
+    }
+
+    nonisolated private static func validateRSS(response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse else {
             throw LDOError.network("无效的 HTTP 响应")
         }
@@ -135,16 +282,37 @@ final class APIClient: @unchecked Sendable {
     }
 }
 
+private struct CreateReplyPayload: Encodable {
+    let raw: String
+    let unlistTopic: Bool
+    let topicID: Int
+    let category: Int?
+    let replyToPostNumber: Int?
+    let isWarning: Bool
+    let whisper: Bool
+    let archetype: String
+    let typingDurationMsecs: Int
+    let composerOpenDurationMsecs: Int
+    let composerVersion: Int
+    let tags: [String]
+    let featuredLink: String?
+    let sharedDraft: Bool
+    let draftKey: String
+    let locale: String
+    let imageSizes: [String: Int]
+    let nestedPost: Bool
+}
+
 private extension ISO8601DateFormatter {
     static let ldo: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime]
-        return f
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
     }()
 
     static let ldoFractional: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
     }()
 }

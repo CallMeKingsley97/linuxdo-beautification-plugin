@@ -10,6 +10,7 @@ struct LoadingPane: View {
     var body: some View {
         VStack(spacing: 12) {
             ProgressView()
+                .controlSize(.regular)
             Text(message)
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -23,22 +24,14 @@ struct ErrorPane: View {
     let retry: () -> Void
 
     var body: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "wifi.exclamationmark")
-                .font(.system(size: 36))
-                .foregroundStyle(.secondary)
-            Text("加载失败")
-                .font(.headline)
+        ContentUnavailableView {
+            Label("加载失败", systemImage: "wifi.exclamationmark")
+        } description: {
             Text(message)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 360)
-            Button("重试", action: retry)
+        } actions: {
+            Button("重新加载", action: retry)
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
     }
 }

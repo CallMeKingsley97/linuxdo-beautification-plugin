@@ -1,6 +1,5 @@
 //
 //  ContentView.swift
-//  三栏：侧栏 / 列表 / 详情
 //
 
 import SwiftUI
@@ -9,18 +8,62 @@ struct ContentView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
+        Group {
+            if appState.selection == .site {
+                siteLayout
+            } else {
+                nativeLayout
+            }
+        }
+        .background {
+            SiteRequestHostView(store: appState.siteSession)
+                .opacity(0.01)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+        .onAppear {
+            appState.siteSession.prepareRequestHost()
+            appState.categoryStore.loadIfNeeded()
+            if appState.selection == .site {
+                appState.siteSession.loadHomeIfNeeded()
+            } else {
+                appState.listViewModel.bind(selection: appState.selection)
+                appState.listViewModel.loadIfNeeded()
+            }
+        }
+        .onChange(of: appState.selection) { _, newSelection in
+            appState.selectedTopicID = nil
+            if newSelection == .site {
+                appState.siteSession.loadHomeIfNeeded()
+            } else {
+                appState.listViewModel.bind(selection: newSelection)
+                appState.listViewModel.refresh(force: false)
+            }
+        }
+        .onChange(of: appState.selectedTopicID) { _, newID in
+            if let newID {
+                appState.detailViewModel.load(topicID: newID)
+            }
+        }
+        .onChange(of: appState.siteSession.currentUser) { _, _ in
+            appState.sessionDidChange()
+        }
+    }
+
+    private var nativeLayout: some View {
         NavigationSplitView {
-            SidebarView(
-                selection: $appState.selection,
-                categoryStore: appState.categoryStore
-            )
+            sidebar
         } content: {
             TopicListView(
                 viewModel: appState.listViewModel,
                 selectedTopicID: $appState.selectedTopicID,
                 selection: appState.selection
             )
-            .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 480)
+            .navigationSplitViewColumnWidth(
+                min: LDOTheme.listMinWidth,
+                ideal: LDOTheme.listIdealWidth,
+                max: LDOTheme.listMaxWidth
+            )
         } detail: {
             TopicDetailView(
                 viewModel: appState.detailViewModel,
@@ -28,24 +71,28 @@ struct ContentView: View {
             )
         }
         .navigationSplitViewStyle(.balanced)
-        .onAppear {
-            appState.categoryStore.loadIfNeeded()
-            appState.listViewModel.bind(selection: appState.selection)
-            appState.listViewModel.loadIfNeeded()
+        .background(LDOTheme.windowBackground)
+    }
+
+    private var siteLayout: some View {
+        NavigationSplitView {
+            sidebar
+        } detail: {
+            SiteBrowserView(store: appState.siteSession)
         }
-        .onChange(of: appState.selection) { _, newSelection in
-            appState.listViewModel.bind(selection: newSelection)
-            appState.listViewModel.refresh(force: false)
-            appState.selectedTopicID = nil
-        }
-        .onChange(of: appState.selectedTopicID) { _, newID in
-            if let newID {
-                appState.detailViewModel.load(topicID: newID)
-            }
-        }
+        .navigationSplitViewStyle(.balanced)
+        .background(LDOTheme.windowBackground)
+    }
+
+    private var sidebar: some View {
+        SidebarView(
+            selection: $appState.selection,
+            categoryStore: appState.categoryStore,
+            siteSession: appState.siteSession,
+            onOpenLogin: appState.openLogin
+        )
     }
 }
-
 #Preview {
     ContentView()
         .environmentObject(AppState())

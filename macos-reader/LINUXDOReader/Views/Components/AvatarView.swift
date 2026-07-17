@@ -21,8 +21,7 @@ struct AvatarView: View {
                     case .failure:
                         placeholder
                     case .empty:
-                        ProgressView()
-                            .controlSize(.small)
+                        placeholder
                     @unknown default:
                         placeholder
                     }

@@ -32,6 +32,34 @@ struct CategorySummary: Identifiable, Hashable {
             parentCategoryID: dto.parentCategoryID
         )
     }
+
+    /// 站点公开分类 URL。RSS 没有分类元数据接口，因此只保留已核验的顶层目录。
+    static let rssCatalog: [CategorySummary] = [
+        rss(id: 4, name: "开发调优", slug: "develop", position: 0),
+        rss(id: 14, name: "资源荟萃", slug: "resource", position: 1),
+        rss(id: 42, name: "文档共建", slug: "wiki", position: 2),
+        rss(id: 27, name: "非我莫属", slug: "job", position: 3),
+        rss(id: 32, name: "读书成诗", slug: "reading", position: 4),
+        rss(id: 34, name: "前沿快讯", slug: "news", position: 5),
+        rss(id: 36, name: "福利羊毛", slug: "welfare", position: 6),
+        rss(id: 11, name: "搞七捻三", slug: "gossip", position: 7),
+        rss(id: 2, name: "运营反馈", slug: "feedback", position: 8),
+    ]
+
+    private static func rss(id: Int, name: String, slug: String, position: Int) -> CategorySummary {
+        CategorySummary(
+            id: id,
+            name: name,
+            slug: slug,
+            color: nil,
+            textColor: nil,
+            description: nil,
+            topicCount: 0,
+            postCount: 0,
+            position: position,
+            parentCategoryID: nil
+        )
+    }
 }
 
 struct CategoriesJSON: Decodable {
