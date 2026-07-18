@@ -8,6 +8,7 @@ struct TopicListView: View {
     @ObservedObject var viewModel: TopicListViewModel
     @Binding var selectedTopicID: Int?
     let selection: BrowseSelection
+    @ObservedObject var highlightStore: HighlightStore
 
     var body: some View {
         Group {
@@ -37,6 +38,7 @@ struct TopicListView: View {
                     }
                 }
                 .help("刷新列表（⌘R）")
+                .disabled(viewModel.isRequestInFlight)
             }
         }
         .onAppear {
@@ -56,7 +58,15 @@ struct TopicListView: View {
             }
 
             ForEach(viewModel.topics) { topic in
-                TopicRowView(topic: topic)
+                let followedUsername = highlightStore.followedHighlightEnabled
+                    ? highlightStore.followedUsername(in: topic)
+                    : nil
+                TopicRowView(
+                    topic: topic,
+                    highlight: highlightStore.topicHighlight(for: topic),
+                    followedUsername: followedUsername,
+                    followedColor: highlightStore.followedColor
+                )
                     .tag(topic.id)
                     .listRowInsets(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
                     .listRowSeparator(.visible)
@@ -71,6 +81,9 @@ struct TopicListView: View {
             }
         }
         .listStyle(.plain)
+        .refreshable {
+            await viewModel.refreshFromPullGesture()
+        }
         .scrollContentBackground(.hidden)
         .background(LDOTheme.contentBackground)
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -110,8 +123,14 @@ struct TopicListView: View {
 
     private func statusBar(updated: Date) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: "clock")
-            Text("更新于 \(updated.formatted(date: .omitted, time: .shortened))")
+            if viewModel.needsRefresh {
+                Image(systemName: "arrow.down.circle")
+                Text("登录状态已变化，请下拉刷新")
+                    .foregroundStyle(.orange)
+            } else {
+                Image(systemName: "clock")
+                Text("更新于 \(updated.formatted(date: .omitted, time: .shortened))")
+            }
             Spacer()
             Text("\(viewModel.topics.count.formatted()) 个主题")
                 .monospacedDigit()

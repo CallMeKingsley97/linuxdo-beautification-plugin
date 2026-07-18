@@ -53,6 +53,14 @@ enum Endpoints {
         baseURL.appendingPathComponent("session/csrf.json")
     }
 
+    static func following(username: String) -> URL {
+        baseURL
+            .appendingPathComponent("u")
+            .appendingPathComponent(username)
+            .appendingPathComponent("follow")
+            .appendingPathComponent("following.json")
+    }
+
     static func latestRSS() -> URL {
         baseURL.appendingPathComponent("latest.rss")
     }

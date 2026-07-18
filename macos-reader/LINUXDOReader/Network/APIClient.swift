@@ -7,7 +7,7 @@ import Foundation
 
 @MainActor
 final class APIClient {
-    nonisolated static let appUserAgent = "LINUXDOReader/0.5.0 (macOS; WebKit session; third-party; not-affiliated)"
+    nonisolated static let appUserAgent = "LINUXDOReader/0.7.0 (macOS; WebKit session; third-party; not-affiliated)"
 
     private let siteSession: SiteSessionStore
     private let rssSession: URLSession
@@ -146,6 +146,12 @@ final class APIClient {
             .sorted { $0.postNumber < $1.postNumber }
     }
 
+    func fetchFollowedUsernames(username: String) async throws -> [String] {
+        let url = Endpoints.following(username: username)
+        let data = try await siteSession.requestJSON(path: url.path)
+        return try Self.decodeFollowedUsernames(data)
+    }
+
     func createReply(
         topicID: Int,
         categoryID: Int?,
@@ -279,6 +285,41 @@ final class APIClient {
             let message = String(data: data, encoding: .utf8).map { String($0.prefix(200)) }
             throw LDOError.server(status: http.statusCode, message: message)
         }
+    }
+
+    nonisolated private static func decodeFollowedUsernames(_ data: Data) throws -> [String] {
+        let root = try JSONSerialization.jsonObject(with: data)
+        let rawUsers: [Any]?
+
+        if let users = root as? [Any] {
+            rawUsers = users
+        } else if let payload = root as? [String: Any] {
+            if let users = payload["users"] as? [Any] {
+                rawUsers = users
+            } else if let users = payload["following"] as? [Any] {
+                rawUsers = users
+            } else if let userList = payload["user_list"] as? [String: Any],
+                      let users = userList["users"] as? [Any] {
+                rawUsers = users
+            } else {
+                rawUsers = nil
+            }
+        } else {
+            rawUsers = nil
+        }
+
+        guard let rawUsers else {
+            throw LDOError.decoding("关注用户响应格式无法识别")
+        }
+
+        let usernames = rawUsers.compactMap { item -> String? in
+            if let username = item as? String { return username }
+            guard let user = item as? [String: Any] else { return nil }
+            return (user["username"] as? String)
+                ?? (user["user_name"] as? String)
+                ?? (user["userName"] as? String)
+        }
+        return Array(Set(usernames)).sorted()
     }
 }
 

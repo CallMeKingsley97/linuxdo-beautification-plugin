@@ -19,13 +19,24 @@ final class TopicListViewModel: ObservableObject {
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var hasMore: Bool = false
     @Published private(set) var currentPage: Int = 0
+    @Published private(set) var needsRefresh = false
 
     private let api: APIClient
     private var selection: BrowseSelection = .latest
     private var loadTask: Task<Void, Never>?
+    private var contentRevision = 0
 
     init(api: APIClient) {
         self.api = api
+    }
+
+    var isRequestInFlight: Bool {
+        switch phase {
+        case .loading, .loadingMore:
+            return true
+        case .idle, .loaded, .failed:
+            return false
+        }
     }
 
     func bind(selection: BrowseSelection) {
@@ -34,6 +45,7 @@ final class TopicListViewModel: ObservableObject {
             topics = []
             currentPage = 0
             hasMore = false
+            needsRefresh = false
             phase = .idle
         }
     }
@@ -46,10 +58,23 @@ final class TopicListViewModel: ObservableObject {
     }
 
     func refresh(force: Bool) {
-        loadTask?.cancel()
-        loadTask = Task { [weak self] in
-            await self?.performLoad(page: 0, append: false, force: force)
+        guard !isRequestInFlight else { return }
+        _ = startLoad(page: 0, append: false, force: force)
+    }
+
+    /// List.refreshable 使用；等待请求结束，让系统下拉指示器与真实加载状态一致。
+    func refreshFromPullGesture() async {
+        if isRequestInFlight {
+            if let loadTask { await loadTask.value }
+            return
         }
+        let task = startLoad(page: 0, append: false, force: true)
+        await task.value
+    }
+
+    func markNeedsRefresh() {
+        contentRevision += 1
+        needsRefresh = true
     }
 
     /// 用户点击「加载更多」时调用（不自动连翻）
@@ -58,13 +83,32 @@ final class TopicListViewModel: ObservableObject {
         if case .loading = phase { return }
         if case .loadingMore = phase { return }
         let next = currentPage + 1
-        loadTask?.cancel()
-        loadTask = Task { [weak self] in
-            await self?.performLoad(page: next, append: true, force: true)
-        }
+        _ = startLoad(page: next, append: true, force: true)
     }
 
-    private func performLoad(page: Int, append: Bool, force: Bool) async {
+    @discardableResult
+    private func startLoad(page: Int, append: Bool, force: Bool) -> Task<Void, Never> {
+        loadTask?.cancel()
+        let revision = contentRevision
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.performLoad(
+                page: page,
+                append: append,
+                force: force,
+                startedAtRevision: revision
+            )
+        }
+        loadTask = task
+        return task
+    }
+
+    private func performLoad(
+        page: Int,
+        append: Bool,
+        force: Bool,
+        startedAtRevision: Int
+    ) async {
         phase = append ? .loadingMore : .loading
         do {
             let result = try await fetchPage(page: page, force: force)
@@ -89,6 +133,9 @@ final class TopicListViewModel: ObservableObject {
             }
             currentPage = page
             lastUpdated = Date()
+            if !append {
+                needsRefresh = contentRevision != startedAtRevision
+            }
             phase = .loaded
         } catch is CancellationError {
             return
@@ -113,6 +160,13 @@ final class TopicListViewModel: ObservableObject {
         case .hot:
             return try await api.fetchHot(page: page, force: force)
         case .site:
+            return TopicListPage(
+                topics: [],
+                usersByID: [:],
+                canCreateTopic: false,
+                hasMore: false
+            )
+        case .settings:
             return TopicListPage(
                 topics: [],
                 usersByID: [:],

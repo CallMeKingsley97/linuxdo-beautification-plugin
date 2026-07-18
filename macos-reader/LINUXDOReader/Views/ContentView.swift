@@ -9,9 +9,12 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if appState.selection == .site {
+            switch appState.selection {
+            case .site:
                 siteLayout
-            } else {
+            case .settings:
+                settingsLayout
+            case .latest, .hot, .category:
                 nativeLayout
             }
         }
@@ -26,18 +29,18 @@ struct ContentView: View {
             appState.categoryStore.loadIfNeeded()
             if appState.selection == .site {
                 appState.siteSession.loadHomeIfNeeded()
-            } else {
-                appState.listViewModel.bind(selection: appState.selection)
-                appState.listViewModel.loadIfNeeded()
             }
         }
         .onChange(of: appState.selection) { _, newSelection in
             appState.selectedTopicID = nil
-            if newSelection == .site {
+            switch newSelection {
+            case .site:
                 appState.siteSession.loadHomeIfNeeded()
-            } else {
+            case .settings:
+                break
+            case .latest, .hot, .category:
                 appState.listViewModel.bind(selection: newSelection)
-                appState.listViewModel.refresh(force: false)
+                appState.listViewModel.loadIfNeeded()
             }
         }
         .onChange(of: appState.selectedTopicID) { _, newID in
@@ -45,8 +48,8 @@ struct ContentView: View {
                 appState.detailViewModel.load(topicID: newID)
             }
         }
-        .onChange(of: appState.siteSession.currentUser) { _, _ in
-            appState.sessionDidChange()
+        .onReceive(appState.siteSession.$currentUser) { user in
+            appState.sessionDidChange(to: user)
         }
     }
 
@@ -57,7 +60,8 @@ struct ContentView: View {
             TopicListView(
                 viewModel: appState.listViewModel,
                 selectedTopicID: $appState.selectedTopicID,
-                selection: appState.selection
+                selection: appState.selection,
+                highlightStore: appState.highlightStore
             )
             .navigationSplitViewColumnWidth(
                 min: LDOTheme.listMinWidth,
@@ -67,7 +71,8 @@ struct ContentView: View {
         } detail: {
             TopicDetailView(
                 viewModel: appState.detailViewModel,
-                topicID: appState.selectedTopicID
+                topicID: appState.selectedTopicID,
+                highlightStore: appState.highlightStore
             )
         }
         .navigationSplitViewStyle(.balanced)
@@ -79,6 +84,16 @@ struct ContentView: View {
             sidebar
         } detail: {
             SiteBrowserView(store: appState.siteSession)
+        }
+        .navigationSplitViewStyle(.balanced)
+        .background(LDOTheme.windowBackground)
+    }
+
+    private var settingsLayout: some View {
+        NavigationSplitView {
+            sidebar
+        } detail: {
+            SettingsView()
         }
         .navigationSplitViewStyle(.balanced)
         .background(LDOTheme.windowBackground)

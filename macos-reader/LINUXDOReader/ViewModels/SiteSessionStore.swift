@@ -84,7 +84,7 @@ final class SiteSessionStore: NSObject, ObservableObject {
 
         for view in [webView, requestWebView] {
             view.navigationDelegate = self
-            view.customUserAgent = Self.safariUserAgent
+            view.customUserAgent = Self.compatibleSafariUserAgent
         }
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
@@ -391,7 +391,7 @@ final class SiteSessionStore: NSObject, ObservableObject {
         return object["error"] as? String
     }
 
-    private static let safariUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15"
+    static let compatibleSafariUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15"
 }
 
 extension SiteSessionStore: WKNavigationDelegate {

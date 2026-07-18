@@ -8,6 +8,7 @@ struct TopicDetailView: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject var viewModel: TopicDetailViewModel
     let topicID: Int?
+    @ObservedObject var highlightStore: HighlightStore
     @State private var replyContext: ReplyContext?
 
     var body: some View {
@@ -69,39 +70,29 @@ struct TopicDetailView: View {
     }
 
     private func detailScroll(_ detail: TopicDetail) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                header(detail)
-                Divider()
-
-                if case .failed(let message) = viewModel.phase {
-                    HStack(spacing: 8) {
-                        Label(message, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                            .font(.caption)
-                        Spacer()
-                        Button("重试") { viewModel.reload() }
-                            .controlSize(.small)
-                    }
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 10)
-                    .background(Color.orange.opacity(0.08))
+        VStack(spacing: 0) {
+            if case .failed(let message) = viewModel.phase {
+                HStack(spacing: 8) {
+                    Label(message, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.caption)
+                    Spacer()
+                    Button("重试") { viewModel.reload() }
+                        .controlSize(.small)
                 }
-
-                ForEach(Array(detail.posts.enumerated()), id: \.element.id) { index, post in
-                    PostCardView(
-                        post: post,
-                        onOpenTopic: { appState.selectTopic(id: $0) },
-                        onReply: { beginReply(to: $0.postNumber) }
-                    )
-                    if index < detail.posts.count - 1 {
-                        Divider()
-                            .padding(.leading, 76)
-                    }
-                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 10)
+                .background(Color.orange.opacity(0.08))
             }
-            .frame(maxWidth: LDOTheme.readerMaxWidth, alignment: .leading)
-            .frame(maxWidth: .infinity)
+
+            TopicDocumentWebView(
+                detail: detail,
+                followedUsernames: highlightStore.followedUsernames,
+                followedHighlightEnabled: highlightStore.followedHighlightEnabled,
+                followedColorHex: highlightStore.followedColorHex,
+                onOpenTopic: { appState.selectTopic(id: $0) },
+                onReply: { beginReply(to: $0.postNumber) }
+            )
         }
         .background(LDOTheme.contentBackground)
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -177,34 +168,6 @@ struct TopicDetailView: View {
         replyContext = ReplyContext(postNumber: postNumber)
     }
 
-    private func header(_ detail: TopicDetail) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(detail.title)
-                .font(.title2.weight(.semibold))
-                .textSelection(.enabled)
-
-            HStack(spacing: 6) {
-                if detail.pinned {
-                    LDOStatusBadge(text: "置顶", color: .orange, systemImage: "pin.fill")
-                }
-                if detail.closed {
-                    LDOStatusBadge(text: "已关闭", color: .secondary, systemImage: "lock.fill")
-                }
-                if detail.archived {
-                    LDOStatusBadge(text: "已归档", color: .secondary, systemImage: "archivebox.fill")
-                }
-                Text("\(detail.postsCount.formatted()) 层")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                ForEach(detail.tags.prefix(4), id: \.self) { tag in
-                    LDOTag(text: tag)
-                }
-            }
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 20)
-    }
 }
 
 private struct ReplyContext: Identifiable {

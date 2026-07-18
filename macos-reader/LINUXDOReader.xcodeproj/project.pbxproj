@@ -33,6 +33,7 @@
 		A10000000000000000000018 /* SiteSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000019 /* SiteSessionStore.swift */; };
 		A10000000000000000000019 /* SiteBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001A /* SiteBrowserView.swift */; };
 		A1000000000000000000001A /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001B /* DesignSystem.swift */; };
+		A1000000000000000000001B /* HighlightStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001C /* HighlightStore.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -63,6 +64,7 @@
 		B10000000000000000000019 /* SiteSessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteSessionStore.swift; sourceTree = "<group>"; };
 		B1000000000000000000001A /* SiteBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteBrowserView.swift; sourceTree = "<group>"; };
 		B1000000000000000000001B /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
+		B1000000000000000000001C /* HighlightStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HighlightStore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -140,6 +142,7 @@
 			children = (
 				B10000000000000000000017 /* CategoryStore.swift */,
 				B10000000000000000000019 /* SiteSessionStore.swift */,
+				B1000000000000000000001C /* HighlightStore.swift */,
 				B10000000000000000000008 /* TopicListViewModel.swift */,
 				B10000000000000000000009 /* TopicDetailViewModel.swift */,
 			);
@@ -276,6 +279,7 @@
 				A10000000000000000000018 /* SiteSessionStore.swift in Sources */,
 				A10000000000000000000019 /* SiteBrowserView.swift in Sources */,
 				A1000000000000000000001A /* DesignSystem.swift in Sources */,
+				A1000000000000000000001B /* HighlightStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -335,7 +339,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.6.1;
+				MARKETING_VERSION = 0.7.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.linuxdo.reader;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -362,7 +366,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.6.1;
+				MARKETING_VERSION = 0.7.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.linuxdo.reader;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;

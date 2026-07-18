@@ -6,6 +6,9 @@ import SwiftUI
 
 struct TopicRowView: View {
     let topic: TopicSummary
+    let highlight: TopicHighlight?
+    let followedUsername: String?
+    let followedColor: Color
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -54,7 +57,7 @@ struct TopicRowView: View {
                 }
             }
 
-            if !topic.tags.isEmpty {
+            if !topic.tags.isEmpty || highlight?.keyword != nil || followedUsername != nil {
                 HStack(spacing: 4) {
                     ForEach(topic.tags.prefix(3), id: \.self) { tag in
                         LDOTag(text: tag)
@@ -64,10 +67,31 @@ struct TopicRowView: View {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
+                    if let keyword = highlight?.keyword {
+                        LDOStatusBadge(
+                            text: "关键词：\(keyword)",
+                            color: highlight?.keywordColor ?? .accentColor,
+                            systemImage: "text.magnifyingglass"
+                        )
+                    }
+                    if let followedUsername {
+                        LDOStatusBadge(
+                            text: "已关注",
+                            color: followedColor,
+                            systemImage: "person.badge.checkmark"
+                        )
+                        .help("已关注 @\(followedUsername)")
+                    }
                 }
             }
         }
+        .padding(.leading, highlight == nil ? 0 : 8)
         .padding(.vertical, 2)
+        .background {
+            if let highlight {
+                LDOHighlightedRowBackground(color: highlight.color)
+            }
+        }
         .contentShape(Rectangle())
     }
 

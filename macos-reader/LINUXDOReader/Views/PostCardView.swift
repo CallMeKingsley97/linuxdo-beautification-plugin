@@ -7,16 +7,21 @@ import AppKit
 
 struct PostCardView: View {
     let post: PostItem
+    let isFollowedAuthor: Bool
+    let followedColor: Color
     let onOpenTopic: ((Int) -> Void)?
     let onReply: ((PostItem) -> Void)?
-    @State private var isHovering = false
 
     init(
         post: PostItem,
+        isFollowedAuthor: Bool = false,
+        followedColor: Color = .green,
         onOpenTopic: ((Int) -> Void)? = nil,
         onReply: ((PostItem) -> Void)? = nil
     ) {
         self.post = post
+        self.isFollowedAuthor = isFollowedAuthor
+        self.followedColor = followedColor
         self.onOpenTopic = onOpenTopic
         self.onReply = onReply
     }
@@ -38,6 +43,13 @@ struct PostCardView: View {
                             }
                             if post.acceptedAnswer {
                                 LDOStatusBadge(text: "已采纳", color: .green, systemImage: "checkmark")
+                            }
+                            if isFollowedAuthor {
+                                LDOStatusBadge(
+                                    text: "已关注",
+                                    color: followedColor,
+                                    systemImage: "person.badge.checkmark"
+                                )
                             }
                         }
 
@@ -65,26 +77,34 @@ struct PostCardView: View {
                         }
                         .buttonStyle(.borderless)
                         .controlSize(.small)
-                        .opacity(isHovering ? 1 : 0.55)
+                        .opacity(0.72)
                         .help("回复 #\(post.postNumber)")
                     }
                 }
 
-                CookedHTMLView(html: post.cookedHTML, onOpenTopic: onOpenTopic)
+                CookedHTMLView(
+                    contentID: post.id,
+                    html: post.cookedHTML,
+                    onOpenTopic: onOpenTopic
+                )
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 18)
-        .background(rowBackground)
+        .background {
+            ZStack {
+                rowBackground
+                if isFollowedAuthor {
+                    LDOHighlightedRowBackground(color: followedColor)
+                }
+            }
+        }
         .contentShape(Rectangle())
-        .onHover { isHovering = $0 }
-        .animation(.easeOut(duration: 0.12), value: isHovering)
     }
 
     private var rowBackground: Color {
         if post.acceptedAnswer { return Color.green.opacity(0.055) }
-        if isHovering { return Color.primary.opacity(0.025) }
         return .clear
     }
 }

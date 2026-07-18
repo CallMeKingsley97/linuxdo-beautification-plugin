@@ -9,11 +9,15 @@ import WebKit
 
 struct CookedHTMLView: NSViewRepresentable {
     private static let heightMessageName = "contentHeight"
+    private static let contentDataStore = WKWebsiteDataStore.nonPersistent()
+    private static let heightCache = NSCache<NSNumber, NSNumber>()
 
+    let contentID: Int
     let html: String
     var onOpenTopic: ((Int) -> Void)?
 
-    init(html: String, onOpenTopic: ((Int) -> Void)? = nil) {
+    init(contentID: Int, html: String, onOpenTopic: ((Int) -> Void)? = nil) {
+        self.contentID = contentID
         self.html = html
         self.onOpenTopic = onOpenTopic
     }
@@ -23,13 +27,18 @@ struct CookedHTMLView: NSViewRepresentable {
         // cooked HTML 来自 linux.do；允许 JS 以便测量高度与部分媒体表现
         config.defaultWebpagePreferences.allowsContentJavaScript = true
         config.preferences.isElementFullscreenEnabled = false
-        config.websiteDataStore = .nonPersistent()
+        config.websiteDataStore = Self.contentDataStore
         config.userContentController.add(context.coordinator, name: Self.heightMessageName)
 
         let webView = HeightReportingWebView(frame: .zero, configuration: config)
+        let cachedHeight = Self.cachedHeight(for: contentID)
+        webView.contentHeight = cachedHeight
+        context.coordinator.lastHeight = cachedHeight
         webView.setValue(false, forKey: "drawsBackground")
         webView.navigationDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = false
+        webView.allowsMagnification = false
+        webView.configureForEmbeddedDocument()
         webView.setContentHuggingPriority(.defaultLow, for: .horizontal)
         webView.setContentHuggingPriority(.required, for: .vertical)
         webView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -42,7 +51,9 @@ struct CookedHTMLView: NSViewRepresentable {
         context.coordinator.webView = webView
         if context.coordinator.lastHTML != html {
             context.coordinator.lastHTML = html
-            webView.contentHeight = 80
+            let cachedHeight = Self.cachedHeight(for: contentID)
+            context.coordinator.lastHeight = cachedHeight
+            webView.contentHeight = cachedHeight
             let page = Self.wrapHTML(html)
             webView.loadHTMLString(page, baseURL: Endpoints.baseURL)
         }
@@ -56,11 +67,15 @@ struct CookedHTMLView: NSViewRepresentable {
         nsView.configuration.userContentController.removeScriptMessageHandler(
             forName: Self.heightMessageName
         )
+        nsView.navigationDelegate = nil
+        nsView.stopLoading()
+        coordinator.webView = nil
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var parent: CookedHTMLView
         var lastHTML: String?
+        var lastHeight: CGFloat = 80
         weak var webView: HeightReportingWebView?
 
         init(_ parent: CookedHTMLView) {
@@ -116,14 +131,31 @@ struct CookedHTMLView: NSViewRepresentable {
                 ?? (value as? Double).map { CGFloat($0) }
                 ?? (value as? NSNumber).map { CGFloat(truncating: $0) }
                 ?? 120
+            let contentHeight = max(48, min(height + 12, 5000))
+            guard abs(lastHeight - contentHeight) > 0.5 else { return }
+            lastHeight = contentHeight
+            CookedHTMLView.heightCache.setObject(
+                NSNumber(value: Double(contentHeight)),
+                forKey: NSNumber(value: parent.contentID)
+            )
             DispatchQueue.main.async { [weak self] in
                 guard let reporting = self?.webView else { return }
-                reporting.contentHeight = max(48, min(height + 12, 5000))
+                reporting.contentHeight = contentHeight
             }
         }
     }
 
-    private static func wrapHTML(_ body: String) -> String {
+    private static func cachedHeight(for contentID: Int) -> CGFloat {
+        heightCache.object(forKey: NSNumber(value: contentID))
+            .map { CGFloat(truncating: $0) }
+            ?? 80
+    }
+
+    fileprivate static func wrapHTML(
+        _ body: String,
+        additionalHead: String = "",
+        additionalScript: String = ""
+    ) -> String {
         """
         <!doctype html>
         <html>
@@ -244,12 +276,14 @@ struct CookedHTMLView: NSViewRepresentable {
             line-height: 1.4;
           }
         </style>
+        \(additionalHead)
         </head>
         <body>
         \(body)
         <script>
           (() => {
             let reportScheduled = false;
+            let lastReportedHeight = { value: 0 };
 
             const reportHeight = () => {
               if (reportScheduled) return;
@@ -260,6 +294,8 @@ struct CookedHTMLView: NSViewRepresentable {
                   document.body.scrollHeight,
                   document.documentElement.scrollHeight
                 );
+                if (Math.abs(lastReportedHeight.value - height) < 1) return;
+                lastReportedHeight.value = height;
                 window.webkit?.messageHandlers?.contentHeight?.postMessage(height);
               });
             };
@@ -301,10 +337,6 @@ struct CookedHTMLView: NSViewRepresentable {
             const start = () => {
               normalizeImages();
               new ResizeObserver(reportHeight).observe(document.body);
-              new MutationObserver(() => {
-                normalizeImages();
-                reportHeight();
-              }).observe(document.body, { childList: true, subtree: true });
               reportHeight();
             };
 
@@ -315,14 +347,436 @@ struct CookedHTMLView: NSViewRepresentable {
             }
           })();
         </script>
+        \(additionalScript)
         </body>
         </html>
         """
     }
 }
 
+/// 将一个主题的楼层合并到单个 WKWebView，避免多 WebView 嵌套滚动和合成开销。
+struct TopicDocumentWebView: NSViewRepresentable {
+    private static let replyMessageName = "replyPost"
+    // 与登录/请求 WebView 共用会话，确保等级受限帖子中的图片也能携带站内 Cookie。
+    private static let contentDataStore = WKWebsiteDataStore.default()
+
+    let detail: TopicDetail
+    let followedUsernames: Set<String>
+    let followedHighlightEnabled: Bool
+    let followedColorHex: String
+    var onOpenTopic: ((Int) -> Void)?
+    var onReply: ((PostItem) -> Void)?
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeNSView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+        configuration.preferences.isElementFullscreenEnabled = false
+        configuration.websiteDataStore = Self.contentDataStore
+        configuration.userContentController.add(
+            context.coordinator,
+            name: Self.replyMessageName
+        )
+
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.setValue(false, forKey: "drawsBackground")
+        webView.navigationDelegate = context.coordinator
+        webView.allowsBackForwardNavigationGestures = false
+        webView.allowsMagnification = true
+        webView.customUserAgent = SiteSessionStore.compatibleSafariUserAgent
+        return webView
+    }
+
+    func updateNSView(_ webView: WKWebView, context: Context) {
+        context.coordinator.parent = self
+        let signature = documentSignature
+        guard context.coordinator.lastSignature != signature else { return }
+
+        let shouldRestoreScroll = context.coordinator.lastTopicID == detail.id
+            && context.coordinator.lastSignature != nil
+        context.coordinator.lastSignature = signature
+        context.coordinator.lastTopicID = detail.id
+        let page = Self.documentHTML(
+            detail: detail,
+            followedUsernames: followedUsernames,
+            followedHighlightEnabled: followedHighlightEnabled,
+            followedColorHex: followedColorHex
+        )
+
+        if shouldRestoreScroll {
+            webView.evaluateJavaScript("window.scrollY") { result, _ in
+                context.coordinator.pendingScrollY = Self.number(from: result)
+                webView.loadHTMLString(page, baseURL: Endpoints.baseURL)
+            }
+        } else {
+            context.coordinator.pendingScrollY = nil
+            webView.loadHTMLString(page, baseURL: Endpoints.baseURL)
+        }
+    }
+
+    static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
+        nsView.configuration.userContentController.removeScriptMessageHandler(
+            forName: Self.replyMessageName
+        )
+        nsView.navigationDelegate = nil
+        nsView.stopLoading()
+    }
+
+    private var documentSignature: String {
+        let posts = detail.posts.map {
+            "\($0.id):\($0.cookedHTML.hashValue):\($0.acceptedAnswer)"
+        }.joined(separator: "|")
+        let followed = followedHighlightEnabled
+            ? followedUsernames.sorted().joined(separator: ",")
+            : "disabled"
+        return "\(detail.id)|\(posts)|\(followed)|\(followedColorHex)"
+    }
+
+    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+        var parent: TopicDocumentWebView
+        var lastSignature: String?
+        var lastTopicID: Int?
+        var pendingScrollY: Double?
+
+        init(_ parent: TopicDocumentWebView) {
+            self.parent = parent
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            guard let pendingScrollY else { return }
+            self.pendingScrollY = nil
+            webView.evaluateJavaScript(
+                "window.scrollTo({ top: \(pendingScrollY), behavior: 'auto' });"
+            )
+        }
+
+        func userContentController(
+            _ userContentController: WKUserContentController,
+            didReceive message: WKScriptMessage
+        ) {
+            guard message.name == TopicDocumentWebView.replyMessageName,
+                  let postNumber = TopicDocumentWebView.integer(from: message.body),
+                  let post = parent.detail.posts.first(where: {
+                      $0.postNumber == postNumber
+                  }),
+                  let onReply = parent.onReply else { return }
+            DispatchQueue.main.async {
+                onReply(post)
+            }
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+        ) {
+            if navigationAction.navigationType == .linkActivated,
+               let url = navigationAction.request.url {
+                if url.host == Endpoints.baseURL.host,
+                   let topicID = Self.topicID(from: url),
+                   let onOpenTopic = parent.onOpenTopic {
+                    DispatchQueue.main.async {
+                        onOpenTopic(topicID)
+                    }
+                    decisionHandler(.cancel)
+                    return
+                }
+                NSWorkspace.shared.open(url)
+                decisionHandler(.cancel)
+                return
+            }
+            decisionHandler(.allow)
+        }
+
+        private static func topicID(from url: URL) -> Int? {
+            guard url.pathComponents.contains("t") else { return nil }
+            return url.pathComponents.compactMap(Int.init).first
+        }
+    }
+
+    private static func documentHTML(
+        detail: TopicDetail,
+        followedUsernames: Set<String>,
+        followedHighlightEnabled: Bool,
+        followedColorHex: String
+    ) -> String {
+        let stateBadges = [
+            detail.pinned ? badgeHTML("置顶", className: "status-warning") : nil,
+            detail.closed ? badgeHTML("已关闭", className: "status-muted") : nil,
+            detail.archived ? badgeHTML("已归档", className: "status-muted") : nil,
+        ].compactMap { $0 }.joined()
+        let tags = detail.tags.prefix(4).map {
+            badgeHTML($0, className: "status-muted")
+        }.joined()
+        let posts = detail.posts.map { post in
+            postHTML(
+                post,
+                followedUsernames: followedUsernames,
+                followedHighlightEnabled: followedHighlightEnabled
+            )
+        }.joined(separator: "")
+
+        let body = """
+        <main class="topic-document" style="--follow-color: \(safeColor(followedColorHex));">
+          <header class="topic-header">
+            <h1>\(escapeHTML(detail.title))</h1>
+            <div class="topic-meta">
+              \(stateBadges)
+              <span class="post-count">\(detail.postsCount.formatted()) 层</span>
+              \(tags)
+            </div>
+          </header>
+          <section class="post-stream">\(posts)</section>
+        </main>
+        """
+
+        let documentCSS = """
+        <style>
+          html, body { min-height: 100%; }
+          body { overflow-y: auto; }
+          .topic-document {
+            width: 100%;
+            max-width: 860px;
+            margin: 0 auto;
+          }
+          .topic-header {
+            padding: 20px 24px;
+          }
+          .topic-header h1 {
+            margin: 0;
+            font-size: 22px;
+            line-height: 1.25;
+            font-weight: 650;
+            letter-spacing: -0.01em;
+          }
+          .topic-meta {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px;
+            margin-top: 12px;
+            color: var(--muted);
+            font-size: 12px;
+          }
+          .status-badge {
+            display: inline-flex;
+            align-items: center;
+            min-height: 20px;
+            box-sizing: border-box;
+            padding: 2px 7px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 600;
+            line-height: 1.2;
+          }
+          .status-muted { color: var(--muted); background: var(--subtle-bg); }
+          .status-warning { color: #b56b00; background: rgba(255, 159, 10, 0.12); }
+          .status-success {
+            color: color-mix(in srgb, var(--follow-color) 82%, var(--text));
+            background: color-mix(in srgb, var(--follow-color) 13%, transparent);
+          }
+          .post-stream { border-top: 1px solid var(--quote-border); }
+          .post {
+            position: relative;
+            display: grid;
+            grid-template-columns: 36px minmax(0, 1fr);
+            gap: 12px;
+            padding: 18px 24px;
+            border-bottom: 1px solid var(--quote-border);
+          }
+          .post.followed {
+            background: color-mix(in srgb, var(--follow-color) 8%, transparent);
+            box-shadow: inset 3px 0 0 var(--follow-color);
+          }
+          .avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            object-fit: cover;
+            background: var(--subtle-bg);
+          }
+          .avatar-fallback {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--muted);
+            font-size: 14px;
+            font-weight: 650;
+          }
+          .post-main { min-width: 0; }
+          .post-heading {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            padding-right: 34px;
+          }
+          .author-line {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+          }
+          .author-name { font-weight: 650; }
+          .username { color: var(--muted); font-size: 12px; }
+          .post-metadata {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 7px;
+            margin-top: 3px;
+            color: var(--muted);
+            font-size: 11px;
+          }
+          .reply-button {
+            position: absolute;
+            top: 17px;
+            right: 22px;
+            border: 0;
+            border-radius: 6px;
+            padding: 4px 6px;
+            color: var(--muted);
+            background: transparent;
+            font: inherit;
+            cursor: pointer;
+          }
+          .reply-button:hover { color: var(--text); background: var(--subtle-bg); }
+          .post-body { margin-top: 10px; }
+          .post-body > :first-child { margin-top: 0; }
+          .post-body > :last-child { margin-bottom: 0; }
+          @media (max-width: 620px) {
+            .topic-header { padding: 16px; }
+            .post { padding: 16px; grid-template-columns: 32px minmax(0, 1fr); }
+            .avatar { width: 32px; height: 32px; }
+            .reply-button { right: 12px; }
+          }
+        </style>
+        """
+
+        let replyScript = """
+        <script>
+          document.addEventListener('click', (event) => {
+            const button = event.target.closest('.reply-button');
+            if (!button) return;
+            const postNumber = Number(button.dataset.postNumber || 0);
+            if (postNumber > 0) {
+              window.webkit?.messageHandlers?.replyPost?.postMessage(postNumber);
+            }
+          });
+        </script>
+        """
+
+        return CookedHTMLView.wrapHTML(
+            body,
+            additionalHead: documentCSS,
+            additionalScript: replyScript
+        )
+    }
+
+    private static func postHTML(
+        _ post: PostItem,
+        followedUsernames: Set<String>,
+        followedHighlightEnabled: Bool
+    ) -> String {
+        let normalizedUsername = post.username
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "@"))
+            .lowercased()
+        let isFollowed = followedHighlightEnabled
+            && followedUsernames.contains(normalizedUsername)
+        let displayName = post.name?.isEmpty == false ? post.name! : post.username
+        let username = post.name?.isEmpty == false && post.name != post.username
+            ? "<span class=\"username\">@\(escapeHTML(post.username))</span>"
+            : ""
+        let acceptedBadge = post.acceptedAnswer
+            ? badgeHTML("已采纳", className: "status-success")
+            : ""
+        let followedBadge = isFollowed
+            ? badgeHTML("已关注", className: "status-success")
+            : ""
+        let replyMetadata = post.replyToPostNumber.map {
+            "<span>回复 #\($0)</span>"
+        } ?? ""
+        let createdAt = post.createdAt.map {
+            escapeHTML($0.formatted(date: .abbreviated, time: .shortened))
+        } ?? ""
+        let avatar = avatarHTML(post)
+        let followedClass = isFollowed ? " followed" : ""
+
+        return """
+        <article class="post\(followedClass)" id="post-\(post.postNumber)">
+          \(avatar)
+          <div class="post-main">
+            <div class="post-heading">
+              <div>
+                <div class="author-line">
+                  <span class="author-name">\(escapeHTML(displayName))</span>
+                  \(username)\(acceptedBadge)\(followedBadge)
+                </div>
+                <div class="post-metadata">
+                  <span>#\(post.postNumber)</span><span>\(createdAt)</span>\(replyMetadata)
+                </div>
+              </div>
+            </div>
+            <button class="reply-button" data-post-number="\(post.postNumber)" aria-label="回复 #\(post.postNumber)" title="回复 #\(post.postNumber)">↩︎</button>
+            <div class="post-body">\(post.cookedHTML)</div>
+          </div>
+        </article>
+        """
+    }
+
+    private static func avatarHTML(_ post: PostItem) -> String {
+        if let template = post.avatarTemplate,
+           let url = Endpoints.avatarURL(template: template, size: 72) {
+            return "<img class=\"avatar\" src=\"\(escapeAttribute(url.absoluteString))\" alt=\"\">"
+        }
+        let initial = escapeHTML(String((post.name ?? post.username).prefix(1)).uppercased())
+        return "<div class=\"avatar avatar-fallback\" aria-hidden=\"true\">\(initial)</div>"
+    }
+
+    private static func badgeHTML(_ text: String, className: String) -> String {
+        "<span class=\"status-badge \(className)\">\(escapeHTML(text))</span>"
+    }
+
+    private static func safeColor(_ value: String) -> String {
+        value.range(of: #"^#[0-9A-Fa-f]{6}$"#, options: .regularExpression) != nil
+            ? value
+            : "#40B883"
+    }
+
+    private static func escapeHTML(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&#39;")
+    }
+
+    private static func escapeAttribute(_ value: String) -> String {
+        escapeHTML(value)
+    }
+
+    private static func number(from value: Any?) -> Double? {
+        if let value = value as? Double { return value }
+        if let value = value as? NSNumber { return value.doubleValue }
+        return nil
+    }
+
+    private static func integer(from value: Any?) -> Int? {
+        if let value = value as? Int { return value }
+        if let value = value as? NSNumber { return value.intValue }
+        if let value = value as? String { return Int(value) }
+        return nil
+    }
+}
+
 /// 根据内容高度报告 intrinsicContentSize，便于嵌在 ScrollView 中
 final class HeightReportingWebView: WKWebView {
+    private var isRegisteredForScrollRouting = false
+
     var contentHeight: CGFloat = 80 {
         didSet {
             guard abs(oldValue - contentHeight) > 0.5 else { return }
@@ -332,5 +786,105 @@ final class HeightReportingWebView: WKWebView {
 
     override var intrinsicContentSize: NSSize {
         NSSize(width: NSView.noIntrinsicMetric, height: contentHeight)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        configureForEmbeddedDocument()
+        if window == nil, isRegisteredForScrollRouting {
+            EmbeddedWebViewScrollRouter.shared.unregister()
+            isRegisteredForScrollRouting = false
+        } else if window != nil, !isRegisteredForScrollRouting {
+            EmbeddedWebViewScrollRouter.shared.register()
+            isRegisteredForScrollRouting = true
+        }
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        if shouldForwardVertically(event), let outerScrollView {
+            outerScrollView.scrollWheel(with: event)
+        } else {
+            super.scrollWheel(with: event)
+        }
+    }
+
+    deinit {
+        if isRegisteredForScrollRouting {
+            EmbeddedWebViewScrollRouter.shared.unregister()
+        }
+    }
+
+    fileprivate func shouldForwardVertically(_ event: NSEvent) -> Bool {
+        abs(event.scrollingDeltaY) > 0
+            && abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX)
+    }
+
+    fileprivate var outerScrollView: NSScrollView? {
+        var ancestor = superview
+        while let view = ancestor {
+            if let scrollView = view as? NSScrollView {
+                return scrollView
+            }
+            ancestor = view.superview
+        }
+        return nil
+    }
+
+    func configureForEmbeddedDocument() {
+        guard let internalScrollView = descendantScrollView(in: self) else { return }
+        internalScrollView.hasVerticalScroller = false
+        internalScrollView.hasHorizontalScroller = false
+        internalScrollView.verticalScrollElasticity = .none
+        internalScrollView.horizontalScrollElasticity = .none
+    }
+
+    private func descendantScrollView(in view: NSView) -> NSScrollView? {
+        for subview in view.subviews {
+            if let scrollView = subview as? NSScrollView {
+                return scrollView
+            }
+            if let nested = descendantScrollView(in: subview) {
+                return nested
+            }
+        }
+        return nil
+    }
+}
+
+private final class EmbeddedWebViewScrollRouter {
+    static let shared = EmbeddedWebViewScrollRouter()
+
+    private var registrationCount = 0
+    private var eventMonitor: Any?
+
+    func register() {
+        registrationCount += 1
+        guard eventMonitor == nil else { return }
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+            guard abs(event.scrollingDeltaY) > 0,
+                  abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX),
+                  let contentView = event.window?.contentView,
+                  var hitView = contentView.hitTest(event.locationInWindow) else {
+                return event
+            }
+
+            while true {
+                if let webView = hitView as? HeightReportingWebView,
+                   webView.shouldForwardVertically(event),
+                   let outerScrollView = webView.outerScrollView {
+                    outerScrollView.scrollWheel(with: event)
+                    return nil
+                }
+                guard let superview = hitView.superview else { return event }
+                hitView = superview
+            }
+        }
+    }
+
+    func unregister() {
+        registrationCount = max(0, registrationCount - 1)
+        guard registrationCount == 0, let eventMonitor else { return }
+        NSEvent.removeMonitor(eventMonitor)
+        self.eventMonitor = nil
     }
 }

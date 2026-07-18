@@ -20,6 +20,8 @@ struct SidebarView: View {
                         .tag(BrowseSelection.hot)
                     Label("登录与验证", systemImage: "person.crop.circle.badge.checkmark")
                         .tag(BrowseSelection.site)
+                    Label("设置", systemImage: "gearshape")
+                        .tag(BrowseSelection.settings)
                 }
 
                 Section("账号") {
@@ -54,13 +56,15 @@ struct SidebarView: View {
         )
         .navigationTitle("LINUX DO")
         .toolbar {
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    categoryStore.refresh(force: true)
-                } label: {
-                    Label("刷新分类", systemImage: "arrow.triangle.2.circlepath")
+            if selection != .site, selection != .settings {
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        categoryStore.refresh(force: true)
+                    } label: {
+                        Label("刷新分类", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .help("重新拉取分类列表")
                 }
-                .help("重新拉取分类列表")
             }
         }
         .onAppear {

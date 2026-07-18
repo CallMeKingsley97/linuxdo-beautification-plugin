@@ -29,7 +29,7 @@ struct CategorySummary: Identifiable, Hashable {
             topicCount: dto.topicCount ?? 0,
             postCount: dto.postCount ?? 0,
             position: dto.position ?? 0,
-            parentCategoryID: dto.parentCategoryID
+            parentCategoryID: dto.parentCategoryId
         )
     }
 
@@ -81,6 +81,6 @@ struct CategoryJSON: Decodable {
     let position: Int?
     let description: String?
     let descriptionText: String?
-    let parentCategoryID: Int?
+    let parentCategoryId: Int?
     let readRestricted: Bool?
 }

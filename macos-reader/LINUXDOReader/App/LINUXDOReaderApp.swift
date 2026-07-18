@@ -41,7 +41,7 @@ struct LINUXDOReaderApp: App {
         }
 
         Settings {
-            SettingsView()
+            SettingsView(usesStandaloneWindowSize: true)
                 .environmentObject(appState)
         }
     }

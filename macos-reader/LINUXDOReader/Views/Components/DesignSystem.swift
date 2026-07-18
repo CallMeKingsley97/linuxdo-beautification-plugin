@@ -17,8 +17,11 @@ enum LDOTheme {
     static let listMaxWidth: CGFloat = 440
 
     static let readerMaxWidth: CGFloat = 860
+    static let settingsMaxWidth: CGFloat = 760
     static let compactCornerRadius: CGFloat = 8
     static let regularCornerRadius: CGFloat = 12
+    static let highlightStripeWidth: CGFloat = 3
+    static let highlightFillOpacity = 0.07
 
     static var windowBackground: Color {
         Color(nsColor: .windowBackgroundColor)
@@ -108,6 +111,20 @@ struct LDOMetric: View {
     }
 }
 
+struct LDOHighlightedRowBackground: View {
+    let color: Color
+
+    var body: some View {
+        color.opacity(LDOTheme.highlightFillOpacity)
+            .overlay(alignment: .leading) {
+                Rectangle()
+                    .fill(color)
+                    .frame(width: LDOTheme.highlightStripeWidth)
+            }
+            .accessibilityHidden(true)
+    }
+}
+
 extension Date {
     var ldoRelativeDescription: String {
         let interval = abs(timeIntervalSinceNow)
@@ -131,5 +148,13 @@ extension Color {
         let green = Double((value & 0x00FF00) >> 8) / 255
         let blue = Double(value & 0x0000FF) / 255
         self.init(red: red, green: green, blue: blue)
+    }
+
+    var ldoHexRGB: String? {
+        guard let color = NSColor(self).usingColorSpace(.sRGB) else { return nil }
+        let red = Int((max(0, min(1, color.redComponent)) * 255).rounded())
+        let green = Int((max(0, min(1, color.greenComponent)) * 255).rounded())
+        let blue = Int((max(0, min(1, color.blueComponent)) * 255).rounded())
+        return String(format: "#%02X%02X%02X", red, green, blue)
     }
 }

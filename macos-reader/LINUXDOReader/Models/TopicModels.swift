@@ -26,6 +26,7 @@ struct TopicSummary: Identifiable, Hashable {
     let visible: Bool
     let excerpt: String?
     let lastPosterUsername: String?
+    let originalPosterUsername: String?
     let posterUsernames: [String]
 }
 
@@ -39,7 +40,7 @@ struct TopicListPage {
     static func from(latest dto: LatestJSON) -> TopicListPage {
         let users = Dictionary(uniqueKeysWithValues: (dto.users ?? []).map { ($0.id, UserSummary.from($0)) })
         let topics = (dto.topicList?.topics ?? []).map { TopicSummary.from(dto: $0, users: users) }
-        let hasMore = dto.topicList?.moreTopicsURL?.isEmpty == false
+        let hasMore = dto.topicList?.moreTopicsUrl?.isEmpty == false
         return TopicListPage(
             topics: topics,
             usersByID: users,
@@ -119,7 +120,7 @@ struct TopicDetail: Identifiable, Hashable {
             title: dto.title ?? "无标题",
             slug: dto.slug ?? "",
             postsCount: dto.postsCount ?? posts.count,
-            categoryID: dto.categoryID,
+            categoryID: dto.categoryId,
             tags: dto.tags?.map(\.name).filter { !$0.isEmpty } ?? [],
             closed: dto.closed ?? false,
             archived: dto.archived ?? false,
@@ -192,11 +193,12 @@ struct ReplyOutcome {
 
 extension TopicSummary {
     static func from(dto: TopicJSON, users: [Int: UserSummary]) -> TopicSummary {
-        let posterNames: [String] = (dto.posters ?? []).compactMap { poster in
-            if let name = poster.user?.username { return name }
-            if let uid = poster.userID, let user = users[uid] { return user.username }
-            return nil
-        }
+        let posters = dto.posters ?? []
+        let posterNames = posters.compactMap { username(for: $0, users: users) }
+        let originalPoster = posters
+            .first(where: isOriginalPoster)
+            .flatMap { username(for: $0, users: users) }
+            ?? posterNames.first
 
         let lastPoster: String? = {
             if let username = dto.lastPosterUsername, !username.isEmpty {
@@ -213,7 +215,7 @@ extension TopicSummary {
             replyCount: dto.replyCount ?? max((dto.postsCount ?? 1) - 1, 0),
             views: dto.views ?? 0,
             likeCount: dto.likeCount ?? 0,
-            categoryID: dto.categoryID,
+            categoryID: dto.categoryId,
             tags: dto.tags?.map(\.name).filter { !$0.isEmpty } ?? [],
             createdAt: dto.createdAt,
             lastPostedAt: dto.lastPostedAt,
@@ -224,6 +226,7 @@ extension TopicSummary {
             visible: dto.visible ?? true,
             excerpt: dto.excerpt,
             lastPosterUsername: lastPoster,
+            originalPosterUsername: originalPoster,
             posterUsernames: posterNames
         )
     }
@@ -252,8 +255,34 @@ extension TopicSummary {
             visible: true,
             excerpt: nil,
             lastPosterUsername: item.creator.isEmpty ? nil : item.creator,
+            originalPosterUsername: item.creator.isEmpty ? nil : item.creator,
             posterUsernames: item.creator.isEmpty ? [] : [item.creator]
         )
+    }
+
+    private static func username(
+        for poster: PosterJSON,
+        users: [Int: UserSummary]
+    ) -> String? {
+        if let username = poster.user?.username, !username.isEmpty {
+            return username
+        }
+        if let userID = poster.userId, let user = users[userID] {
+            return user.username
+        }
+        return nil
+    }
+
+    private static func isOriginalPoster(_ poster: PosterJSON) -> Bool {
+        let description = [poster.description, poster.extras]
+            .compactMap { $0 }
+            .joined(separator: " ")
+            .lowercased()
+        return description.contains("original poster")
+            || description.contains("topic owner")
+            || description.contains("主题作者")
+            || description.contains("楼主")
+            || description.contains("原始发帖人")
     }
 }
 
@@ -265,7 +294,7 @@ extension PostItem {
             postNumber: dto.postNumber ?? 0,
             username: dto.username ?? "unknown",
             name: dto.name,
-            userID: dto.userID,
+            userID: dto.userId,
             avatarTemplate: dto.avatarTemplate,
             createdAt: dto.createdAt,
             cookedHTML: dto.cooked ?? "",
@@ -352,6 +381,9 @@ private enum RSSIdentifier {
 
 // MARK: - DTO
 
+// APIClient 使用 convertFromSnakeCase，`user_id` 会被标准化为 `userId`。
+// DTO 的缩写字段因此使用 Id / Url；领域模型仍使用 Swift 常见的 ID / URL 命名。
+
 struct LatestJSON: Decodable {
     let users: [UserJSON]?
     let topicList: TopicListJSON?
@@ -359,7 +391,7 @@ struct LatestJSON: Decodable {
 
 struct TopicListJSON: Decodable {
     let canCreateTopic: Bool?
-    let moreTopicsURL: String?
+    let moreTopicsUrl: String?
     let topics: [TopicJSON]?
 }
 
@@ -371,7 +403,7 @@ struct TopicJSON: Decodable {
     let postsCount: Int?
     let replyCount: Int?
     let highestPostNumber: Int?
-    let imageURL: String?
+    let imageUrl: String?
     let createdAt: Date?
     let lastPostedAt: Date?
     let bumped: Bool?
@@ -388,7 +420,7 @@ struct TopicJSON: Decodable {
     let tags: [TopicTagJSON]?
     let views: Int?
     let likeCount: Int?
-    let categoryID: Int?
+    let categoryId: Int?
     let excerpt: String?
     let lastPosterUsername: String?
     let posters: [PosterJSON]?
@@ -397,8 +429,8 @@ struct TopicJSON: Decodable {
 struct PosterJSON: Decodable {
     let extras: String?
     let description: String?
-    let userID: Int?
-    let primaryGroupID: Int?
+    let userId: Int?
+    let primaryGroupId: Int?
     let user: UserJSON?
 }
 
@@ -426,10 +458,10 @@ struct TopicDetailJSON: Decodable {
     let hasSummary: Bool?
     let archetype: String?
     let slug: String?
-    let categoryID: Int?
+    let categoryId: Int?
     let wordCount: Int?
     let deletedAt: Date?
-    let userID: Int?
+    let userId: Int?
     let pinned: Bool?
     let tags: [TopicTagJSON]?
     let chunkSize: Int?
@@ -460,7 +492,7 @@ struct PostJSON: Decodable {
     let readersCount: Int?
     let score: Double?
     let yours: Bool?
-    let topicID: Int?
+    let topicId: Int?
     let topicSlug: String?
     let displayUsername: String?
     let primaryGroupName: String?
@@ -470,7 +502,7 @@ struct PostJSON: Decodable {
     let canDelete: Bool?
     let canRecover: Bool?
     let canWiki: Bool?
-    let userID: Int?
+    let userId: Int?
     let acceptedAnswer: Bool?
 }
 
