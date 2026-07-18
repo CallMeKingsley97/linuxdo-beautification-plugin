@@ -138,6 +138,9 @@ private struct HighlightSettingsSections: View {
         } footer: {
             Text("登录后每天同步一次关注名单。主题列表按参与作者标记，楼层按回复作者标记；关注与关键词同时命中时，两种状态都会保留。名单仅存储在本机。")
                 .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
         }
 
@@ -164,6 +167,9 @@ private struct HighlightSettingsSections: View {
         } footer: {
             Text("仅匹配主题标题且不区分大小写；多条规则同时命中时，列表中靠前的规则优先。")
                 .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -202,8 +208,10 @@ private struct KeywordRuleSettingsRow: View {
 
             TextField("输入关键词", text: keywordBinding)
                 .textFieldStyle(.roundedBorder)
+                .labelsHidden()
                 .multilineTextAlignment(.leading)
                 .frame(minWidth: 180, maxWidth: .infinity)
+                .accessibilityLabel("关键词")
 
             ColorPicker(
                 "关键词颜色",
