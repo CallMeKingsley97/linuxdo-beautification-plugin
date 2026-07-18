@@ -68,15 +68,15 @@ struct TopicRowView: View {
                             .foregroundStyle(.secondary)
                     }
                     if let keyword = highlight?.keyword {
-                        LDOStatusBadge(
-                            text: "关键词：\(keyword)",
+                        LDOHighlightIndicator(
+                            text: keyword,
                             color: highlight?.keywordColor ?? .accentColor,
                             systemImage: "text.magnifyingglass"
                         )
                     }
                     if let followedUsername {
-                        LDOStatusBadge(
-                            text: "已关注",
+                        LDOHighlightIndicator(
+                            text: "关注用户",
                             color: followedColor,
                             systemImage: "person.badge.checkmark"
                         )
@@ -85,7 +85,7 @@ struct TopicRowView: View {
                 }
             }
         }
-        .padding(.leading, highlight == nil ? 0 : 8)
+        .padding(.leading, highlight == nil ? 0 : 10)
         .padding(.vertical, 2)
         .background {
             if let highlight {

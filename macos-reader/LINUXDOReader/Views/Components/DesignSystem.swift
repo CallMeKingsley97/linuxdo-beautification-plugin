@@ -17,11 +17,11 @@ enum LDOTheme {
     static let listMaxWidth: CGFloat = 440
 
     static let readerMaxWidth: CGFloat = 860
-    static let settingsMaxWidth: CGFloat = 760
+    static let settingsMaxWidth: CGFloat = 700
     static let compactCornerRadius: CGFloat = 8
     static let regularCornerRadius: CGFloat = 12
-    static let highlightStripeWidth: CGFloat = 3
-    static let highlightFillOpacity = 0.07
+    static let highlightStripeWidth: CGFloat = 2
+    static let highlightFillOpacity = 0.065
 
     static var windowBackground: Color {
         Color(nsColor: .windowBackgroundColor)
@@ -115,13 +115,39 @@ struct LDOHighlightedRowBackground: View {
     let color: Color
 
     var body: some View {
-        color.opacity(LDOTheme.highlightFillOpacity)
+        LinearGradient(
+            colors: [
+                color.opacity(LDOTheme.highlightFillOpacity),
+                color.opacity(LDOTheme.highlightFillOpacity * 0.28),
+                .clear,
+            ],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
             .overlay(alignment: .leading) {
-                Rectangle()
+                Capsule()
                     .fill(color)
-                    .frame(width: LDOTheme.highlightStripeWidth)
+                    .frame(width: LDOTheme.highlightStripeWidth, height: 28)
+                    .padding(.leading, 1)
             }
             .accessibilityHidden(true)
+    }
+}
+
+struct LDOHighlightIndicator: View {
+    let text: String
+    let color: Color
+    let systemImage: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: systemImage)
+                .foregroundStyle(color)
+            Text(text)
+                .foregroundStyle(.secondary)
+        }
+        .font(.caption2.weight(.medium))
+        .lineLimit(1)
     }
 }
 
