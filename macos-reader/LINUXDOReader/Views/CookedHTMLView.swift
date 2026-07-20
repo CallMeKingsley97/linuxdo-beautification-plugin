@@ -7,6 +7,24 @@ import SwiftUI
 import AppKit
 import WebKit
 
+enum PostMenuAction: String {
+    case like
+    case reactions
+    case copyLink
+    case share
+    case boost
+    case more
+    case bookmark
+    case report
+    case edit
+    case delete
+    case recover
+    case wiki
+    case solution
+    case sharedIssue
+    case reply
+}
+
 struct CookedHTMLView: NSViewRepresentable {
     private static let heightMessageName = "contentHeight"
     private static let contentDataStore = WKWebsiteDataStore.nonPersistent()
@@ -356,7 +374,7 @@ struct CookedHTMLView: NSViewRepresentable {
 
 /// 将一个主题的楼层合并到单个 WKWebView，避免多 WebView 嵌套滚动和合成开销。
 struct TopicDocumentWebView: NSViewRepresentable {
-    private static let replyMessageName = "replyPost"
+    private static let postActionMessageName = "postAction"
     private static let userProfileMessageName = "openUserProfile"
     private static let readingVisibilityMessageName = "readingVisibility"
     // 与登录/请求 WebView 共用会话，确保等级受限帖子中的图片也能携带站内 Cookie。
@@ -368,10 +386,13 @@ struct TopicDocumentWebView: NSViewRepresentable {
     let followedColorHex: String
     let readPostNumbers: Set<Int>
     let reportingPostNumbers: Set<Int>
+    let runningPostActions: [Int: Set<PostActionKind>]
+    let isLoggedIn: Bool
     let targetPostNumber: Int?
     var onOpenTopic: ((Int) -> Void)?
     var onOpenUser: ((PostItem) -> Void)?
     var onReply: ((PostItem) -> Void)?
+    var onPostAction: ((PostItem, PostMenuAction) -> Void)?
     var onVisiblePostsChanged: ((Set<Int>) -> Void)?
 
     func makeCoordinator() -> Coordinator {
@@ -385,7 +406,7 @@ struct TopicDocumentWebView: NSViewRepresentable {
         configuration.websiteDataStore = Self.contentDataStore
         configuration.userContentController.add(
             context.coordinator,
-            name: Self.replyMessageName
+            name: Self.postActionMessageName
         )
         configuration.userContentController.add(
             context.coordinator,
@@ -402,6 +423,7 @@ struct TopicDocumentWebView: NSViewRepresentable {
         webView.allowsBackForwardNavigationGestures = false
         webView.allowsMagnification = true
         webView.customUserAgent = SiteSessionStore.compatibleSafariUserAgent
+        context.coordinator.webView = webView
         return webView
     }
 
@@ -410,6 +432,7 @@ struct TopicDocumentWebView: NSViewRepresentable {
         let signature = documentSignature
         guard context.coordinator.lastSignature != signature else {
             context.coordinator.syncReadState(in: webView)
+            context.coordinator.syncInteractionState(in: webView)
             context.coordinator.scrollToTargetIfNeeded(in: webView)
             return
         }
@@ -425,13 +448,16 @@ struct TopicDocumentWebView: NSViewRepresentable {
         context.coordinator.lastTopicID = detail.id
         context.coordinator.documentReady = false
         context.coordinator.lastReadStateSignature = nil
+        context.coordinator.lastInteractionStateSignature = nil
         let page = Self.documentHTML(
             detail: detail,
             followedUsernames: followedUsernames,
             followedHighlightEnabled: followedHighlightEnabled,
             followedColorHex: followedColorHex,
             readPostNumbers: readPostNumbers,
-            reportingPostNumbers: reportingPostNumbers
+            reportingPostNumbers: reportingPostNumbers,
+            runningPostActions: runningPostActions,
+            isLoggedIn: isLoggedIn
         )
 
         if shouldRestoreScroll {
@@ -449,7 +475,7 @@ struct TopicDocumentWebView: NSViewRepresentable {
 
     static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
         nsView.configuration.userContentController.removeScriptMessageHandler(
-            forName: Self.replyMessageName
+            forName: Self.postActionMessageName
         )
         nsView.configuration.userContentController.removeScriptMessageHandler(
             forName: Self.userProfileMessageName
@@ -459,16 +485,17 @@ struct TopicDocumentWebView: NSViewRepresentable {
         )
         nsView.navigationDelegate = nil
         nsView.stopLoading()
+        coordinator.webView = nil
     }
 
     private var documentSignature: String {
         let posts = detail.posts.map {
-            "\($0.id):\($0.cookedHTML.hashValue):\($0.acceptedAnswer)"
+            "\($0.id):\($0.cookedHTML.hashValue):\($0.acceptedAnswer):\($0.hidden):\($0.deletedAt?.timeIntervalSince1970 ?? 0)"
         }.joined(separator: "|")
         let followed = followedHighlightEnabled
             ? followedUsernames.sorted().joined(separator: ",")
             : "disabled"
-        return "\(detail.id)|\(posts)|\(followed)|\(followedColorHex)"
+        return "\(detail.id)|\(posts)|\(followed)|\(followedColorHex)|\(detail.sharedIssueVisible)|\(detail.canCreatePost)|\(isLoggedIn)"
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
@@ -478,7 +505,11 @@ struct TopicDocumentWebView: NSViewRepresentable {
         var pendingScrollY: Double?
         var documentReady = false
         var lastReadStateSignature: String?
+        var lastInteractionStateSignature: String?
         var lastScrolledTarget: String?
+        weak var webView: WKWebView?
+        private var sharingPicker: NSSharingServicePicker?
+        private var lastMenuAnchor = NSPoint.zero
 
         init(_ parent: TopicDocumentWebView) {
             self.parent = parent
@@ -494,6 +525,7 @@ struct TopicDocumentWebView: NSViewRepresentable {
             }
             scrollToTargetIfNeeded(in: webView)
             syncReadState(in: webView, force: true)
+            syncInteractionState(in: webView, force: true)
         }
 
         func scrollToTargetIfNeeded(in webView: WKWebView) {
@@ -522,15 +554,8 @@ struct TopicDocumentWebView: NSViewRepresentable {
             didReceive message: WKScriptMessage
         ) {
             switch message.name {
-            case TopicDocumentWebView.replyMessageName:
-                guard let postNumber = TopicDocumentWebView.integer(from: message.body),
-                      let post = parent.detail.posts.first(where: {
-                          $0.postNumber == postNumber
-                      }),
-                      let onReply = parent.onReply else { return }
-                DispatchQueue.main.async {
-                    onReply(post)
-                }
+            case TopicDocumentWebView.postActionMessageName:
+                handlePostActionMessage(message.body)
             case TopicDocumentWebView.userProfileMessageName:
                 guard let postNumber = TopicDocumentWebView.integer(from: message.body),
                       let post = parent.detail.posts.first(where: {
@@ -561,6 +586,207 @@ struct TopicDocumentWebView: NSViewRepresentable {
 
             let script = "window.LDOReading?.setState(\(TopicDocumentWebView.javaScriptArray(read)), \(TopicDocumentWebView.javaScriptArray(reporting)));"
             webView.evaluateJavaScript(script)
+        }
+
+        func syncInteractionState(in webView: WKWebView, force: Bool = false) {
+            guard documentReady else { return }
+            let payload = TopicDocumentWebView.interactionStateJSON(
+                detail: parent.detail,
+                runningPostActions: parent.runningPostActions,
+                isLoggedIn: parent.isLoggedIn
+            )
+            guard force || payload != lastInteractionStateSignature else { return }
+            lastInteractionStateSignature = payload
+            webView.evaluateJavaScript("window.LDOActions?.setState(\(payload));")
+        }
+
+        private func handlePostActionMessage(_ body: Any) {
+            guard let payload = body as? [String: Any],
+                  let postNumber = TopicDocumentWebView.integer(from: payload["postNumber"]),
+                  let rawAction = payload["action"] as? String,
+                  let action = PostMenuAction(rawValue: rawAction),
+                  let post = parent.detail.posts.first(where: {
+                      $0.postNumber == postNumber
+                  }) else { return }
+
+            if action == .more, let webView {
+                if let rect = payload["rect"] as? [String: Any] {
+                    let x = TopicDocumentWebView.number(from: rect["x"]) ?? 0
+                    let y = TopicDocumentWebView.number(from: rect["y"]) ?? 0
+                    let height = TopicDocumentWebView.number(from: rect["height"]) ?? 0
+                    lastMenuAnchor = webView.isFlipped
+                        ? NSPoint(x: x, y: y + height)
+                        : NSPoint(x: x, y: max(0, webView.bounds.height - y - height))
+                }
+                showMoreMenu(for: post, in: webView)
+                return
+            }
+
+            if action == .copyLink {
+                copyLink(for: post)
+                return
+            }
+
+            dispatch(post: post, action: action)
+        }
+
+        private func showMoreMenu(for post: PostItem, in webView: WKWebView) {
+            let menu = NSMenu(title: "楼层操作")
+            addMenuItem(
+                to: menu,
+                title: "分享…",
+                symbol: "square.and.arrow.up",
+                action: .share,
+                post: post
+            )
+
+            if post.canBookmark || post.bookmarked || !parent.isLoggedIn {
+                addMenuItem(
+                    to: menu,
+                    title: post.bookmarked ? "编辑收藏…" : "收藏…",
+                    symbol: post.bookmarked ? "bookmark.fill" : "bookmark",
+                    action: .bookmark,
+                    post: post
+                )
+            }
+            if post.canFlag || !parent.isLoggedIn {
+                addMenuItem(
+                    to: menu,
+                    title: "举报…",
+                    symbol: "flag",
+                    action: .report,
+                    post: post
+                )
+            }
+
+            let hasEditingActions = post.canEdit || post.canDelete || post.canRecover
+                || post.canWiki || post.canAcceptAnswer
+            if hasEditingActions {
+                menu.addItem(.separator())
+            }
+            if post.canEdit {
+                addMenuItem(
+                    to: menu,
+                    title: "编辑…",
+                    symbol: "pencil",
+                    action: .edit,
+                    post: post
+                )
+            }
+            if post.canAcceptAnswer {
+                addMenuItem(
+                    to: menu,
+                    title: post.acceptedAnswer ? "取消采纳" : "采纳为解决方案",
+                    symbol: post.acceptedAnswer ? "checkmark.square.fill" : "checkmark.square",
+                    action: .solution,
+                    post: post
+                )
+            }
+            if post.canWiki {
+                addMenuItem(
+                    to: menu,
+                    title: post.wiki ? "取消 Wiki" : "设为 Wiki",
+                    symbol: "person.2.wave.2",
+                    action: .wiki,
+                    post: post
+                )
+            }
+            if post.canRecover {
+                addMenuItem(
+                    to: menu,
+                    title: "恢复帖子",
+                    symbol: "arrow.uturn.backward",
+                    action: .recover,
+                    post: post
+                )
+            } else if post.canDelete {
+                let item = addMenuItem(
+                    to: menu,
+                    title: "删除帖子…",
+                    symbol: "trash",
+                    action: .delete,
+                    post: post
+                )
+                item.attributedTitle = NSAttributedString(
+                    string: item.title,
+                    attributes: [.foregroundColor: NSColor.systemRed]
+                )
+            }
+
+            menu.popUp(positioning: nil, at: lastMenuAnchor, in: webView)
+        }
+
+        @discardableResult
+        private func addMenuItem(
+            to menu: NSMenu,
+            title: String,
+            symbol: String,
+            action: PostMenuAction,
+            post: PostItem
+        ) -> NSMenuItem {
+            let item = NSMenuItem(
+                title: title,
+                action: #selector(performMenuAction(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.tag = post.postNumber
+            item.representedObject = action.rawValue
+            item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+            menu.addItem(item)
+            return item
+        }
+
+        @objc private func performMenuAction(_ sender: NSMenuItem) {
+            guard let rawAction = sender.representedObject as? String,
+                  let action = PostMenuAction(rawValue: rawAction),
+                  let post = parent.detail.posts.first(where: {
+                      $0.postNumber == sender.tag
+                  }) else { return }
+            switch action {
+            case .share:
+                showSharePicker(for: post)
+            case .copyLink:
+                copyLink(for: post)
+            default:
+                dispatch(post: post, action: action)
+            }
+        }
+
+        private func dispatch(post: PostItem, action: PostMenuAction) {
+            if action == .reply, let onReply = parent.onReply {
+                DispatchQueue.main.async { onReply(post) }
+                return
+            }
+            guard let onPostAction = parent.onPostAction else { return }
+            DispatchQueue.main.async { onPostAction(post, action) }
+        }
+
+        private func copyLink(for post: PostItem) {
+            let url = TopicDocumentWebView.postURL(
+                detail: parent.detail,
+                postNumber: post.postNumber
+            )
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(url.absoluteString, forType: .string)
+            webView?.evaluateJavaScript(
+                "window.LDOActions?.feedback(\(post.postNumber), '已复制链接');"
+            )
+        }
+
+        private func showSharePicker(for post: PostItem) {
+            guard let webView else { return }
+            let url = TopicDocumentWebView.postURL(
+                detail: parent.detail,
+                postNumber: post.postNumber
+            )
+            let picker = NSSharingServicePicker(items: [url])
+            sharingPicker = picker
+            picker.show(
+                relativeTo: NSRect(origin: lastMenuAnchor, size: NSSize(width: 1, height: 1)),
+                of: webView,
+                preferredEdge: .minY
+            )
         }
 
         func webView(
@@ -598,7 +824,9 @@ struct TopicDocumentWebView: NSViewRepresentable {
         followedHighlightEnabled: Bool,
         followedColorHex: String,
         readPostNumbers: Set<Int>,
-        reportingPostNumbers: Set<Int>
+        reportingPostNumbers: Set<Int>,
+        runningPostActions: [Int: Set<PostActionKind>],
+        isLoggedIn: Bool
     ) -> String {
         let stateBadges = [
             detail.pinned ? badgeHTML("置顶", className: "status-warning") : nil,
@@ -614,7 +842,14 @@ struct TopicDocumentWebView: NSViewRepresentable {
                 followedUsernames: followedUsernames,
                 followedHighlightEnabled: followedHighlightEnabled,
                 readPostNumbers: readPostNumbers,
-                reportingPostNumbers: reportingPostNumbers
+                reportingPostNumbers: reportingPostNumbers,
+                runningActions: runningPostActions[post.id] ?? [],
+                canLike: post.canToggleLike || !isLoggedIn,
+                canReply: detail.canCreatePost || !isLoggedIn,
+                sharedIssueVisible: post.postNumber == 1 && detail.sharedIssueVisible,
+                sharedIssueCreated: detail.userCreatedSharedIssue,
+                sharedIssueCount: detail.sharedIssueCount,
+                canCreateSharedIssue: detail.canCreateSharedIssue || detail.userCreatedSharedIssue || !isLoggedIn
             )
         }.joined(separator: "")
 
@@ -634,6 +869,7 @@ struct TopicDocumentWebView: NSViewRepresentable {
 
         let documentCSS = """
         <style>
+          \(actionSymbolCSS)
           html, body { min-height: 100%; }
           body { overflow-y: auto; }
           .topic-document {
@@ -730,7 +966,6 @@ struct TopicDocumentWebView: NSViewRepresentable {
             display: flex;
             align-items: flex-start;
             gap: 8px;
-            padding-right: 34px;
           }
           .author-line {
             display: flex;
@@ -780,40 +1015,186 @@ struct TopicDocumentWebView: NSViewRepresentable {
               box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.12);
             }
           }
-          .reply-button {
-            position: absolute;
-            top: 17px;
-            right: 22px;
-            border: 0;
-            border-radius: 6px;
-            padding: 4px 6px;
-            color: var(--muted);
-            background: transparent;
-            font: inherit;
-            cursor: pointer;
-          }
-          .reply-button:hover { color: var(--text); background: var(--subtle-bg); }
           .post-body { margin-top: 10px; }
           .post-body > :first-child { margin-top: 0; }
           .post-body > :last-child { margin-bottom: 0; }
+          .shared-issue-button {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 12px;
+            padding: 6px 10px;
+            border: 1px solid var(--quote-border);
+            border-radius: 8px;
+            color: var(--muted);
+            background: transparent;
+            font: 13px/1.2 -apple-system, BlinkMacSystemFont, sans-serif;
+            cursor: pointer;
+          }
+          .shared-issue-button:hover { color: var(--text); background: var(--subtle-bg); }
+          .shared-issue-button.active { color: var(--link); border-color: color-mix(in srgb, var(--link) 38%, transparent); }
+          .post-actions-footer {
+            display: flex;
+            min-height: 32px;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-top: 12px;
+          }
+          .reaction-summary {
+            display: inline-flex;
+            min-width: 0;
+            align-items: center;
+            gap: 3px;
+            color: var(--muted);
+            font-size: 12px;
+          }
+          .reaction-summary:empty { display: none; }
+          .reaction-emoji { font-size: 15px; line-height: 1; }
+          .reaction-count { margin-left: 2px; font-variant-numeric: tabular-nums; }
+          .post-action-buttons {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            margin-left: auto;
+          }
+          .post-action-button {
+            position: relative;
+            display: inline-flex;
+            width: 30px;
+            height: 28px;
+            align-items: center;
+            justify-content: center;
+            border: 0;
+            border-radius: 6px;
+            padding: 0;
+            color: var(--muted);
+            background: transparent;
+            cursor: pointer;
+            transition: color 100ms ease, background-color 100ms ease, transform 80ms ease;
+          }
+          .post-action-button[hidden] { display: none !important; }
+          .post-action-button:hover {
+            color: var(--text);
+            background: color-mix(in srgb, var(--text) 7%, transparent);
+          }
+          .post-action-button:active:not(:disabled) { transform: scale(0.94); }
+          .post-action-button:focus-visible,
+          .shared-issue-button:focus-visible {
+            outline: 2px solid var(--link);
+            outline-offset: 1px;
+          }
+          .post-action-button:disabled,
+          .shared-issue-button:disabled { opacity: 0.42; cursor: default; }
+          .like-button.active { color: #d70015; }
+          .like-button .sf-heart-fill { display: none; }
+          .like-button.active .sf-heart { display: none; }
+          .like-button.active .sf-heart-fill { display: block; }
+          @media (prefers-color-scheme: dark) {
+            .like-button.active { color: #ff453a; }
+          }
+          .post-action-button.loading::after,
+          .shared-issue-button.loading::after {
+            content: '';
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            border: 1.5px solid currentColor;
+            border-right-color: transparent;
+            border-radius: 50%;
+            animation: action-spin 0.8s linear infinite;
+          }
+          .post-action-button.loading > span,
+          .shared-issue-button.loading > span { opacity: 0; }
+          @keyframes action-spin { to { transform: rotate(360deg); } }
+          .boost-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px;
+            margin-top: 6px;
+          }
+          .boost-row:empty { display: none; }
+          .boost-pill {
+            display: inline-flex;
+            max-width: 72%;
+            align-items: center;
+            gap: 6px;
+            box-sizing: border-box;
+            padding: 3px 9px 3px 4px;
+            border-radius: 999px;
+            color: var(--muted);
+            background: var(--subtle-bg);
+            font-size: 12px;
+          }
+          .boost-avatar {
+            width: 20px;
+            height: 20px;
+            flex: 0 0 20px;
+            border-radius: 50%;
+            object-fit: cover;
+          }
+          .boost-content {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          .boost-content img { width: 16px; height: 16px; border-radius: 0; vertical-align: -3px; }
+          .action-feedback {
+            position: absolute;
+            right: 24px;
+            bottom: 8px;
+            z-index: 3;
+            padding: 5px 8px;
+            border-radius: 7px;
+            color: var(--text);
+            background: color-mix(in srgb, var(--subtle-bg) 88%, var(--text) 12%);
+            font-size: 11px;
+            opacity: 0;
+            transform: translateY(4px);
+            pointer-events: none;
+            transition: opacity 160ms ease, transform 160ms ease;
+          }
+          .action-feedback.visible { opacity: 1; transform: translateY(0); }
           @media (max-width: 620px) {
             .topic-header { padding: 16px; }
             .post { padding: 16px; grid-template-columns: 32px minmax(0, 1fr); }
             .avatar, .avatar-button { width: 32px; height: 32px; }
-            .reply-button { right: 12px; }
+            .post-actions-footer { align-items: flex-end; }
           }
         </style>
         """
 
         let interactionScript = """
         <script>
+          const sendPostAction = (button, actionOverride) => {
+            const article = button.closest('.post[data-post-number]');
+            const postNumber = Number(article?.dataset.postNumber || 0);
+            const action = actionOverride || button.dataset.postAction || '';
+            if (postNumber <= 0 || !action) return;
+            const rect = button.getBoundingClientRect();
+            window.webkit?.messageHandlers?.postAction?.postMessage({
+              postNumber,
+              action,
+              rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+            });
+          };
+
+          let reactionHoldTimer = 0;
+          let reactionHoldButton = null;
+          let suppressLikeClick = false;
+
           document.addEventListener('click', (event) => {
-            const button = event.target.closest('.reply-button');
-            if (button) {
-              const postNumber = Number(button.dataset.postNumber || 0);
-              if (postNumber > 0) {
-                window.webkit?.messageHandlers?.replyPost?.postMessage(postNumber);
+            const actionButton = event.target.closest('[data-post-action]');
+            if (actionButton) {
+              if (suppressLikeClick && actionButton.classList.contains('like-button')) {
+                suppressLikeClick = false;
+                event.preventDefault();
+                return;
               }
+              sendPostAction(actionButton);
               return;
             }
 
@@ -825,6 +1206,117 @@ struct TopicDocumentWebView: NSViewRepresentable {
               }
             }
           });
+
+          document.addEventListener('pointerdown', (event) => {
+            const button = event.target.closest('.like-button');
+            if (!button || button.disabled) return;
+            reactionHoldButton = button;
+            reactionHoldTimer = window.setTimeout(() => {
+              suppressLikeClick = true;
+              sendPostAction(button, 'reactions');
+              reactionHoldTimer = 0;
+            }, 480);
+          });
+
+          const cancelReactionHold = () => {
+            if (reactionHoldTimer) window.clearTimeout(reactionHoldTimer);
+            reactionHoldTimer = 0;
+            reactionHoldButton = null;
+          };
+          document.addEventListener('pointerup', cancelReactionHold);
+          document.addEventListener('pointercancel', cancelReactionHold);
+          document.addEventListener('pointermove', (event) => {
+            if (reactionHoldButton && !reactionHoldButton.contains(event.target)) {
+              cancelReactionHold();
+            }
+          });
+          document.addEventListener('contextmenu', (event) => {
+            const button = event.target.closest('.like-button');
+            if (!button || button.disabled) return;
+            event.preventDefault();
+            cancelReactionHold();
+            suppressLikeClick = false;
+            sendPostAction(button, 'reactions');
+          });
+
+          (() => {
+            const emojiFor = (id) => ({
+              heart: '♥', '+1': '👍', laughing: '😆', open_mouth: '😮',
+              clap: '👏', confetti_ball: '🎉', hugs: '🤗',
+              distorted_face: '🫠', tieba_087: '😭', bili_057: '✨'
+            })[id] || '●';
+            const escapeHTML = (value) => String(value || '')
+              .replaceAll('&', '&amp;')
+              .replaceAll('<', '&lt;')
+              .replaceAll('>', '&gt;')
+              .replaceAll('"', '&quot;')
+              .replaceAll("'", '&#39;');
+            const renderBoosts = (article, state) => {
+              const row = article.querySelector('.boost-row');
+              const inlineRocket = article.querySelector('.boost-inline-button');
+              if (!row || !inlineRocket) return;
+              const boosts = state.boosts || [];
+              inlineRocket.hidden = boosts.length > 0 || !state.canBoost;
+              const pills = boosts.map((boost) => {
+                const avatar = boost.avatarURL
+                  ? `<img class="boost-avatar" src="${escapeHTML(boost.avatarURL)}" alt="">`
+                  : `<span class="boost-avatar avatar-fallback">${escapeHTML((boost.displayName || '?').slice(0, 1).toUpperCase())}</span>`;
+                return `<span class="boost-pill" title="${escapeHTML(boost.displayName)}">${avatar}<span class="boost-content">${boost.cookedHTML || ''}</span></span>`;
+              }).join('');
+              const rocket = boosts.length > 0 && state.canBoost
+                ? `<button class="post-action-button" data-post-action="boost" aria-label="Boost 此楼层" title="Boost 此楼层"><span class="sf-symbol sf-boost" aria-hidden="true"></span></button>`
+                : '';
+              row.innerHTML = pills + rocket;
+            };
+
+            window.LDOActions = {
+              setState(payload) {
+                for (const state of (payload?.posts || [])) {
+                  const article = document.getElementById(`post-${state.postNumber}`);
+                  if (!article) continue;
+                  const running = new Set(state.running || []);
+                  const like = article.querySelector('.like-button');
+                  if (like) {
+                    like.classList.toggle('active', Boolean(state.currentReaction || state.liked));
+                    like.classList.toggle('loading', running.has('reaction'));
+                    like.disabled = running.has('reaction') || !state.canLike;
+                  }
+                  const summary = article.querySelector('.reaction-summary');
+                  if (summary) {
+                    const reactions = (state.reactions || []).filter((item) => item.count > 0);
+                    summary.innerHTML = reactions.map((item) => `<span class="reaction-emoji" title="${escapeHTML(item.id)}">${emojiFor(item.id)}</span>`).join('')
+                      + (state.reactionUsersCount > 0 ? `<span class="reaction-count">${state.reactionUsersCount}</span>` : '');
+                  }
+                  renderBoosts(article, state);
+                  const boostButtons = article.querySelectorAll('[data-post-action="boost"]');
+                  boostButtons.forEach((button) => {
+                    button.classList.toggle('loading', running.has('boost'));
+                    button.disabled = running.has('boost');
+                  });
+                }
+
+                const shared = payload?.sharedIssue;
+                if (shared) {
+                  const button = document.querySelector('.shared-issue-button');
+                  if (button) {
+                    button.classList.toggle('active', Boolean(shared.created));
+                    button.classList.toggle('loading', Boolean(shared.loading));
+                    button.disabled = Boolean(shared.loading) || !shared.enabled;
+                    const label = button.querySelector('.shared-issue-label');
+                    if (label) label.textContent = shared.created ? `俺也一样 (${shared.count})` : '俺也一样';
+                  }
+                }
+              },
+              feedback(postNumber, message) {
+                const article = document.getElementById(`post-${postNumber}`);
+                const feedback = article?.querySelector('.action-feedback');
+                if (!feedback) return;
+                feedback.textContent = message;
+                feedback.classList.add('visible');
+                window.setTimeout(() => feedback.classList.remove('visible'), 1400);
+              }
+            };
+          })();
 
           (() => {
             const articles = Array.from(document.querySelectorAll('.post[data-post-number]'));
@@ -909,7 +1401,14 @@ struct TopicDocumentWebView: NSViewRepresentable {
         followedUsernames: Set<String>,
         followedHighlightEnabled: Bool,
         readPostNumbers: Set<Int>,
-        reportingPostNumbers: Set<Int>
+        reportingPostNumbers: Set<Int>,
+        runningActions: Set<PostActionKind>,
+        canLike: Bool,
+        canReply: Bool,
+        sharedIssueVisible: Bool,
+        sharedIssueCreated: Bool,
+        sharedIssueCount: Int,
+        canCreateSharedIssue: Bool
     ) -> String {
         let normalizedUsername = post.username
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -941,6 +1440,20 @@ struct TopicDocumentWebView: NSViewRepresentable {
         let indicatorAccessibility = isRead
             ? "aria-hidden=\"true\""
             : "role=\"status\" aria-label=\"未读楼层\" title=\"停留后同步阅读状态\""
+        let actionFooter = postActionsHTML(
+            post,
+            runningActions: runningActions,
+            canLike: canLike,
+            canReply: canReply
+        )
+        let sharedIssue = sharedIssueVisible
+            ? sharedIssueHTML(
+                created: sharedIssueCreated,
+                count: sharedIssueCount,
+                enabled: canCreateSharedIssue,
+                loading: runningActions.contains(.sharedIssue)
+            )
+            : ""
 
         return """
         <article class="post\(followedClass)\(readClass)\(reportingClass)" id="post-\(post.postNumber)" data-post-number="\(post.postNumber)">
@@ -957,11 +1470,251 @@ struct TopicDocumentWebView: NSViewRepresentable {
                 </div>
               </div>
             </div>
-            <button class="reply-button" data-post-number="\(post.postNumber)" aria-label="回复 #\(post.postNumber)" title="回复 #\(post.postNumber)">↩︎</button>
             <div class="post-body">\(post.cookedHTML)</div>
+            \(sharedIssue)
+            \(actionFooter)
+            <span class="action-feedback" aria-live="polite"></span>
           </div>
         </article>
         """
+    }
+
+    private static func postActionsHTML(
+        _ post: PostItem,
+        runningActions: Set<PostActionKind>,
+        canLike: Bool,
+        canReply: Bool
+    ) -> String {
+        let reactionSummary = post.reactions
+            .filter { $0.count > 0 }
+            .map { "<span class=\"reaction-emoji\" title=\"\(escapeAttribute($0.id))\">\(reactionEmoji($0.id))</span>" }
+            .joined()
+        let reactionCount = post.reactionUsersCount > 0
+            ? "<span class=\"reaction-count\">\(post.reactionUsersCount)</span>"
+            : ""
+        let likeLoading = runningActions.contains(.reaction)
+        let likeClasses = [
+            "post-action-button",
+            "like-button",
+            post.isLiked ? "active" : nil,
+            likeLoading ? "loading" : nil,
+        ].compactMap { $0 }.joined(separator: " ")
+        let boostLoading = runningActions.contains(.boost)
+        let boostClasses = [
+            "post-action-button",
+            "boost-inline-button",
+            boostLoading ? "loading" : nil,
+        ].compactMap { $0 }.joined(separator: " ")
+        let boostButton = """
+        <button class="\(boostClasses)" data-post-action="boost" aria-label="Boost 此楼层" title="Boost 此楼层" \(post.canBoost && post.boosts.isEmpty ? "" : "hidden") \(boostLoading ? "disabled" : "")><span class="sf-symbol sf-boost" aria-hidden="true"></span></button>
+        """
+        let replyButton = canReply
+            ? "<button class=\"post-action-button\" data-post-action=\"reply\" aria-label=\"回复 #\(post.postNumber)\" title=\"回复 #\(post.postNumber)\"><span class=\"sf-symbol sf-reply\" aria-hidden=\"true\"></span></button>"
+            : ""
+
+        return """
+        <div class="post-actions-footer">
+          <div class="reaction-summary">\(reactionSummary)\(reactionCount)</div>
+          <div class="post-action-buttons">
+            <button class="\(likeClasses)" data-post-action="like" aria-label="点赞；按住或右键选择其他回应" title="点赞；按住或右键选择其他回应" \(likeLoading || !canLike ? "disabled" : "")><span class="sf-symbol sf-heart" aria-hidden="true"></span><span class="sf-symbol sf-heart-fill" aria-hidden="true"></span></button>
+            <button class="post-action-button" data-post-action="copyLink" aria-label="复制楼层链接" title="复制楼层链接"><span class="sf-symbol sf-link" aria-hidden="true"></span></button>
+            \(boostButton)
+            <button class="post-action-button" data-post-action="more" aria-label="更多操作" title="更多操作"><span class="sf-symbol sf-more" aria-hidden="true"></span></button>
+            \(replyButton)
+          </div>
+        </div>
+        <div class="boost-row">\(boostRowHTML(post))</div>
+        """
+    }
+
+    private static func sharedIssueHTML(
+        created: Bool,
+        count: Int,
+        enabled: Bool,
+        loading: Bool
+    ) -> String {
+        let classes = [
+            "shared-issue-button",
+            created ? "active" : nil,
+            loading ? "loading" : nil,
+        ].compactMap { $0 }.joined(separator: " ")
+        let label = created ? "俺也一样 (\(count))" : "俺也一样"
+        return "<button class=\"\(classes)\" data-post-action=\"sharedIssue\" \(!enabled || loading ? "disabled" : "")><span class=\"sf-symbol sf-hand\" aria-hidden=\"true\"></span><span class=\"shared-issue-label\">\(label)</span></button>"
+    }
+
+    private static func boostRowHTML(_ post: PostItem) -> String {
+        guard !post.boosts.isEmpty else { return "" }
+        let pills = post.boosts.map { boost in
+            let displayName = boost.user.displayName
+            let avatar: String
+            if let template = boost.user.avatarTemplate,
+               let url = Endpoints.avatarURL(template: template, size: 40) {
+                avatar = "<img class=\"boost-avatar\" src=\"\(escapeAttribute(url.absoluteString))\" alt=\"\">"
+            } else {
+                avatar = "<span class=\"boost-avatar avatar-fallback\">\(escapeHTML(String(displayName.prefix(1)).uppercased()))</span>"
+            }
+            return "<span class=\"boost-pill\" title=\"\(escapeAttribute(displayName))\">\(avatar)<span class=\"boost-content\">\(boost.cookedHTML)</span></span>"
+        }.joined()
+        let rocket = post.canBoost
+            ? "<button class=\"post-action-button\" data-post-action=\"boost\" aria-label=\"Boost 此楼层\" title=\"Boost 此楼层\"><span class=\"sf-symbol sf-boost\" aria-hidden=\"true\"></span></button>"
+            : ""
+        return pills + rocket
+    }
+
+    private static let actionSymbols: [(cssClass: String, symbolName: String)] = [
+        ("sf-heart", "heart"),
+        ("sf-heart-fill", "heart.fill"),
+        ("sf-link", "link"),
+        ("sf-boost", "paperplane.fill"),
+        ("sf-more", "ellipsis"),
+        ("sf-reply", "arrowshape.turn.up.left"),
+        ("sf-hand", "hand.raised"),
+    ]
+
+    private static let actionSymbolCSS: String = {
+        let sharedRules = """
+        .sf-symbol {
+          display: block;
+          width: 16px;
+          height: 16px;
+          flex: 0 0 16px;
+          background-color: currentColor;
+          -webkit-mask-repeat: no-repeat;
+          -webkit-mask-position: center;
+          -webkit-mask-size: contain;
+          mask-repeat: no-repeat;
+          mask-position: center;
+          mask-size: contain;
+        }
+        .shared-issue-button .sf-symbol {
+          width: 14px;
+          height: 14px;
+          flex-basis: 14px;
+        }
+        """
+        let symbolRules = actionSymbols.compactMap { symbol -> String? in
+            guard let dataURL = systemSymbolMaskDataURL(named: symbol.symbolName) else {
+                return nil
+            }
+            return """
+            .\(symbol.cssClass) {
+              -webkit-mask-image: url("\(dataURL)");
+              mask-image: url("\(dataURL)");
+            }
+            """
+        }
+        return ([sharedRules] + symbolRules).joined(separator: "\n")
+    }()
+
+    private static func systemSymbolMaskDataURL(named name: String) -> String? {
+        guard let baseImage = NSImage(systemSymbolName: name, accessibilityDescription: nil) else {
+            return nil
+        }
+        let configuration = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
+        let image = baseImage.withSymbolConfiguration(configuration) ?? baseImage
+        let canvasSize = NSSize(width: 20, height: 20)
+        guard let bitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: 40,
+            pixelsHigh: 40,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ), let graphicsContext = NSGraphicsContext(bitmapImageRep: bitmap) else {
+            return nil
+        }
+        bitmap.size = canvasSize
+
+        let sourceSize = image.size
+        let scale = min(
+            16 / max(sourceSize.width, 1),
+            16 / max(sourceSize.height, 1)
+        )
+        let drawSize = NSSize(
+            width: sourceSize.width * scale,
+            height: sourceSize.height * scale
+        )
+        let drawRect = NSRect(
+            x: (canvasSize.width - drawSize.width) / 2,
+            y: (canvasSize.height - drawSize.height) / 2,
+            width: drawSize.width,
+            height: drawSize.height
+        )
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = graphicsContext
+        NSColor.clear.setFill()
+        NSRect(origin: .zero, size: canvasSize).fill()
+        image.draw(
+            in: drawRect,
+            from: .zero,
+            operation: .sourceOver,
+            fraction: 1
+        )
+        graphicsContext.flushGraphics()
+        NSGraphicsContext.restoreGraphicsState()
+
+        var minimumX = bitmap.pixelsWide
+        var minimumY = bitmap.pixelsHigh
+        var maximumX = -1
+        var maximumY = -1
+        for y in 0..<bitmap.pixelsHigh {
+            for x in 0..<bitmap.pixelsWide {
+                guard (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.01 else {
+                    continue
+                }
+                minimumX = min(minimumX, x)
+                minimumY = min(minimumY, y)
+                maximumX = max(maximumX, x)
+                maximumY = max(maximumY, y)
+            }
+        }
+        guard maximumX >= minimumX, maximumY >= minimumY else { return nil }
+
+        let padding = 1
+        let cropX = max(0, minimumX - padding)
+        let cropY = max(0, minimumY - padding)
+        let cropWidth = min(
+            bitmap.pixelsWide - cropX,
+            maximumX - minimumX + 1 + padding * 2
+        )
+        let cropHeight = min(
+            bitmap.pixelsHigh - cropY,
+            maximumY - minimumY + 1 + padding * 2
+        )
+        guard let croppedImage = bitmap.cgImage?.cropping(
+            to: CGRect(
+                x: cropX,
+                y: cropY,
+                width: cropWidth,
+                height: cropHeight
+            )
+        ) else { return nil }
+        let croppedBitmap = NSBitmapImageRep(cgImage: croppedImage)
+        guard let data = croppedBitmap.representation(using: .png, properties: [:]) else {
+            return nil
+        }
+        return "data:image/png;base64,\(data.base64EncodedString())"
+    }
+
+    private static func reactionEmoji(_ id: String) -> String {
+        switch id {
+        case "heart": return "♥"
+        case "+1": return "👍"
+        case "laughing": return "😆"
+        case "open_mouth": return "😮"
+        case "clap": return "👏"
+        case "confetti_ball": return "🎉"
+        case "hugs": return "🤗"
+        case "distorted_face": return "🫠"
+        case "tieba_087": return "😭"
+        case "bili_057": return "✨"
+        default: return "●"
+        }
     }
 
     private static func avatarHTML(_ post: PostItem) -> String {
@@ -982,6 +1735,61 @@ struct TopicDocumentWebView: NSViewRepresentable {
         value.range(of: #"^#[0-9A-Fa-f]{6}$"#, options: .regularExpression) != nil
             ? value
             : "#40B883"
+    }
+
+    private static func interactionStateJSON(
+        detail: TopicDetail,
+        runningPostActions: [Int: Set<PostActionKind>],
+        isLoggedIn: Bool
+    ) -> String {
+        let posts: [[String: Any]] = detail.posts.map { post in
+            let boosts: [[String: Any]] = post.boosts.map { boost in
+                let avatarURL = boost.user.avatarTemplate
+                    .flatMap { Endpoints.avatarURL(template: $0, size: 40)?.absoluteString }
+                return [
+                    "id": boost.id,
+                    "cookedHTML": boost.cookedHTML,
+                    "displayName": boost.user.displayName,
+                    "avatarURL": avatarURL ?? "",
+                ]
+            }
+            return [
+                "postNumber": post.postNumber,
+                "liked": post.isLiked,
+                "currentReaction": post.currentUserReaction ?? "",
+                "reactionUsersCount": post.reactionUsersCount,
+                "reactions": post.reactions.map { ["id": $0.id, "count": $0.count] },
+                "boosts": boosts,
+                "canBoost": post.canBoost,
+                "canLike": post.canToggleLike || !isLoggedIn,
+                "running": (runningPostActions[post.id] ?? []).map(\.rawValue).sorted(),
+            ]
+        }
+        let firstPostID = detail.posts.first?.id
+        let payload: [String: Any] = [
+            "posts": posts,
+            "sharedIssue": [
+                "created": detail.userCreatedSharedIssue,
+                "count": detail.sharedIssueCount,
+                "enabled": detail.canCreateSharedIssue || detail.userCreatedSharedIssue || !isLoggedIn,
+                "loading": firstPostID.map {
+                    runningPostActions[$0]?.contains(.sharedIssue) == true
+                } ?? false,
+            ],
+        ]
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: payload,
+            options: [.sortedKeys]
+        ) else { return "{}" }
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
+    private static func postURL(detail: TopicDetail, postNumber: Int) -> URL {
+        var url = Endpoints.topicPage(id: detail.id, slug: detail.slug)
+        if postNumber > 0 {
+            url.appendPathComponent(String(postNumber))
+        }
+        return url
     }
 
     private static func escapeHTML(_ value: String) -> String {

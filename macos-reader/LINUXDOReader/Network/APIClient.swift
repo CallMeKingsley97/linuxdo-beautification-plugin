@@ -146,6 +146,220 @@ final class APIClient {
             .sorted { $0.postNumber < $1.postNumber }
     }
 
+    func fetchPostActionTypes(force: Bool = false) async throws -> [PostFlagType] {
+        let response: SiteJSON = try await getJSON(
+            url: Endpoints.site(),
+            ttl: 300,
+            force: force
+        )
+        return (response.postActionTypes ?? [])
+            .compactMap(PostFlagType.from)
+            .filter { $0.enabled && $0.appliesToPost }
+    }
+
+    func fetchEditableRaw(postID: Int) async throws -> String {
+        let post: PostJSON = try await getJSON(
+            url: Endpoints.post(id: postID),
+            ttl: nil,
+            force: true
+        )
+        guard let raw = post.raw else {
+            throw LDOError.decoding("服务器没有返回可编辑的原文")
+        }
+        return raw
+    }
+
+    func toggleReaction(postID: Int, topicID: Int, reaction: String) async throws {
+        let encodedReaction = Self.encodedPathComponent(reaction)
+        _ = try await siteSession.requestEmpty(
+            path: "/discourse-reactions/posts/\(postID)/custom-reactions/\(encodedReaction)/toggle.json",
+            method: "PUT",
+            referrer: Endpoints.topicPage(id: topicID).absoluteString
+        )
+    }
+
+    func toggleStandardLike(
+        postID: Int,
+        topicID: Int,
+        remove: Bool
+    ) async throws -> [PostActionSummary]? {
+        let data: Data
+        if remove {
+            data = try await siteSession.requestForm(
+                path: "/post_actions/\(postID)",
+                method: "DELETE",
+                body: "post_action_type_id=2",
+                referrer: Endpoints.topicPage(id: topicID).absoluteString
+            )
+        } else {
+            data = try await siteSession.requestForm(
+                path: "/post_actions",
+                body: "id=\(postID)&post_action_type_id=2&flag_topic=false",
+                referrer: Endpoints.topicPage(id: topicID).absoluteString
+            )
+        }
+        return decodeActionSummaries(from: data)
+    }
+
+    func saveBookmark(
+        postID: Int,
+        topicID: Int,
+        bookmarkID: Int?,
+        name: String?,
+        reminderAt: Date?,
+        autoDeletePreference: BookmarkAutoDeletePreference
+    ) async throws -> BookmarkSaveResult {
+        let reminder = reminderAt.map { ISO8601DateFormatter.ldoFractional.string(from: $0) } ?? ""
+        let body = Self.formBody([
+            ("reminder_at", reminder),
+            ("name", name ?? ""),
+            ("id", bookmarkID.map(String.init) ?? ""),
+            ("auto_delete_preference", String(autoDeletePreference.rawValue)),
+            ("bookmarkable_id", String(postID)),
+            ("bookmarkable_type", "Post"),
+        ])
+        let data: Data
+        if let bookmarkID {
+            data = try await siteSession.requestForm(
+                path: "/bookmarks/\(bookmarkID).json",
+                method: "PUT",
+                body: body,
+                referrer: Endpoints.topicPage(id: topicID).absoluteString
+            )
+        } else {
+            data = try await siteSession.requestForm(
+                path: "/bookmarks.json",
+                body: body,
+                referrer: Endpoints.topicPage(id: topicID).absoluteString
+            )
+        }
+        let response = try? decoder.decode(BookmarkMutationResponseJSON.self, from: data)
+        return BookmarkSaveResult(
+            bookmarkID: response?.id ?? bookmarkID,
+            topicBookmarked: response?.topicBookmarked
+        )
+    }
+
+    func removeBookmark(
+        bookmarkID: Int?,
+        postID: Int,
+        topicID: Int
+    ) async throws -> BookmarkSaveResult {
+        let data = try await siteSession.requestEmpty(
+            path: bookmarkID.map { "/bookmarks/\($0).json" }
+                ?? "/posts/\(postID)/bookmark",
+            method: "DELETE",
+            referrer: Endpoints.topicPage(id: topicID).absoluteString
+        )
+        let response = try? decoder.decode(BookmarkMutationResponseJSON.self, from: data)
+        return BookmarkSaveResult(
+            bookmarkID: nil,
+            topicBookmarked: response?.topicBookmarked
+        )
+    }
+
+    func flagPost(
+        postID: Int,
+        topicID: Int,
+        typeID: Int,
+        message: String?
+    ) async throws -> [PostActionSummary]? {
+        let body = Self.formBody([
+            ("id", String(postID)),
+            ("post_action_type_id", String(typeID)),
+            ("message", message ?? ""),
+            ("is_warning", "false"),
+            ("take_action", "false"),
+            ("queue_for_review", "false"),
+            ("flag_topic", "false"),
+        ])
+        let data = try await siteSession.requestForm(
+            path: "/post_actions",
+            body: body,
+            referrer: Endpoints.topicPage(id: topicID).absoluteString
+        )
+        return decodeActionSummaries(from: data)
+    }
+
+    func createBoost(postID: Int, topicID: Int, raw: String) async throws -> PostBoost {
+        let data = try await siteSession.requestForm(
+            path: "/discourse-boosts/posts/\(postID)/boosts",
+            body: Self.formBody([("raw", raw)]),
+            referrer: Endpoints.topicPage(id: topicID).absoluteString
+        )
+        let response = try decoder.decode(PostBoostJSON.self, from: data)
+        guard let boost = PostBoost.from(response) else {
+            throw LDOError.decoding("Boost 响应缺少必要数据")
+        }
+        return boost
+    }
+
+    func toggleSharedIssue(topicID: Int) async throws -> SharedIssueResult {
+        let data = try await siteSession.requestForm(
+            path: "/solution/shared_issue",
+            body: "topic_id=\(topicID)",
+            referrer: Endpoints.topicPage(id: topicID).absoluteString
+        )
+        let response = try decoder.decode(SharedIssueResponseJSON.self, from: data)
+        return SharedIssueResult(
+            created: response.userCreatedSharedIssue ?? false,
+            count: response.count ?? 0
+        )
+    }
+
+    func editPost(
+        postID: Int,
+        topicID: Int,
+        raw: String,
+        editReason: String?
+    ) async throws {
+        let payload = UpdatePostPayload(
+            post: .init(raw: raw, editReason: editReason),
+            imageSizes: [:]
+        )
+        let body = try encoder.encode(payload)
+        _ = try await siteSession.requestJSON(
+            path: "/posts/\(postID)",
+            method: "PUT",
+            body: body,
+            referrer: Endpoints.topicPage(id: topicID).absoluteString
+        )
+    }
+
+    func deletePost(postID: Int, topicID: Int) async throws {
+        _ = try await siteSession.requestForm(
+            path: "/posts/\(postID)",
+            method: "DELETE",
+            body: Self.formBody([("context", "/t/topic/\(topicID)")]),
+            referrer: Endpoints.topicPage(id: topicID).absoluteString
+        )
+    }
+
+    func recoverPost(postID: Int, topicID: Int) async throws {
+        _ = try await siteSession.requestEmpty(
+            path: "/posts/\(postID)/recover",
+            method: "PUT",
+            referrer: Endpoints.topicPage(id: topicID).absoluteString
+        )
+    }
+
+    func setPostWiki(postID: Int, topicID: Int, wiki: Bool) async throws {
+        _ = try await siteSession.requestForm(
+            path: "/posts/\(postID)/wiki",
+            method: "PUT",
+            body: "wiki=\(wiki ? "true" : "false")",
+            referrer: Endpoints.topicPage(id: topicID).absoluteString
+        )
+    }
+
+    func setAcceptedAnswer(postID: Int, topicID: Int, accepted: Bool) async throws {
+        _ = try await siteSession.requestForm(
+            path: accepted ? "/solution/accept" : "/solution/unaccept",
+            body: "id=\(postID)",
+            referrer: Endpoints.topicPage(id: topicID).absoluteString
+        )
+    }
+
     func reportTopicTimings(
         topicID: Int,
         timings: [Int: Int],
@@ -567,7 +781,27 @@ final class APIClient {
     }
 
     nonisolated private static func encodedPathComponent(_ value: String) -> String {
-        value.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? value
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+    }
+
+    nonisolated private static func formBody(_ items: [(String, String)]) -> String {
+        var components = URLComponents()
+        components.queryItems = items.map { URLQueryItem(name: $0.0, value: $0.1) }
+        return components.percentEncodedQuery ?? ""
+    }
+
+    private func decodeActionSummaries(from data: Data) -> [PostActionSummary]? {
+        if let response = try? decoder.decode(PostActionMutationResponseJSON.self, from: data),
+           let result = response.result {
+            return result.map(PostActionSummary.from)
+        }
+        if let post = try? decoder.decode(PostJSON.self, from: data),
+           let actions = post.actionsSummary {
+            return actions.map(PostActionSummary.from)
+        }
+        return nil
     }
 }
 
@@ -590,6 +824,16 @@ private struct CreateReplyPayload: Encodable {
     let locale: String
     let imageSizes: [String: Int]
     let nestedPost: Bool
+}
+
+private struct UpdatePostPayload: Encodable {
+    struct Post: Encodable {
+        let raw: String
+        let editReason: String?
+    }
+
+    let post: Post
+    let imageSizes: [String: Int]
 }
 
 private extension ISO8601DateFormatter {

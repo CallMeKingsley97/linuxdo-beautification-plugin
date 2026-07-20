@@ -27,6 +27,14 @@ enum Endpoints {
         baseURL.appendingPathComponent("t/\(id).json")
     }
 
+    static func site() -> URL {
+        baseURL.appendingPathComponent("site.json")
+    }
+
+    static func post(id: Int) -> URL {
+        baseURL.appendingPathComponent("posts/\(id).json")
+    }
+
     static func topicPosts(id: Int, postIDs: [Int]) -> URL {
         var components = URLComponents(
             url: baseURL.appendingPathComponent("t/\(id)/posts.json"),

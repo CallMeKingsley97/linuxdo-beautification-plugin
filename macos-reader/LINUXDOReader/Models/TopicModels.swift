@@ -81,42 +81,212 @@ struct UserSummary: Identifiable, Hashable {
     }
 }
 
-struct PostItem: Identifiable, Hashable {
+struct PostActionSummary: Hashable {
     let id: Int
-    let topicID: Int
-    let postNumber: Int
-    let username: String
-    let name: String?
-    let userID: Int?
-    let avatarTemplate: String?
-    let createdAt: Date?
+    var count: Int
+    var acted: Bool
+    var canAct: Bool
+    var canUndo: Bool
+
+    static func from(_ dto: PostActionSummaryJSON) -> PostActionSummary {
+        PostActionSummary(
+            id: dto.id,
+            count: dto.count ?? 0,
+            acted: dto.acted ?? false,
+            canAct: dto.canAct ?? false,
+            canUndo: dto.canUndo ?? false
+        )
+    }
+}
+
+struct PostReaction: Identifiable, Hashable {
+    let id: String
+    var count: Int
+}
+
+struct PostBoost: Identifiable, Hashable {
+    let id: Int
     let cookedHTML: String
-    let replyToPostNumber: Int?
-    let postType: Int?
-    let acceptedAnswer: Bool
-    let read: Bool?
+    let user: UserSummary
+
+    static func from(_ dto: PostBoostJSON) -> PostBoost? {
+        guard let id = dto.id,
+              let user = dto.user,
+              let username = user.username,
+              !username.isEmpty else { return nil }
+        return PostBoost(
+            id: id,
+            cookedHTML: dto.cooked ?? "",
+            user: UserSummary(
+                id: user.id ?? 0,
+                username: username,
+                name: user.name,
+                avatarTemplate: user.avatarTemplate
+            )
+        )
+    }
+}
+
+enum BookmarkAutoDeletePreference: Int, CaseIterable, Identifiable {
+    case never = 0
+    case whenReminderSent = 1
+    case onOwnerReply = 2
+    case clearReminder = 3
+
+    var id: Int { rawValue }
+
+    var title: String {
+        switch self {
+        case .never: return "永不自动删除"
+        case .whenReminderSent: return "提醒发送后删除书签"
+        case .onOwnerReply: return "作者回复后删除书签"
+        case .clearReminder: return "提醒后保留书签"
+        }
+    }
+}
+
+struct PostFlagType: Identifiable, Hashable {
+    let id: Int
+    let nameKey: String
+    let name: String
+    let requiresMessage: Bool
+    let enabled: Bool
+    let appliesTo: [String]
+
+    var appliesToPost: Bool { appliesTo.contains("Post") }
+    var isIllegal: Bool { nameKey == "illegal" }
+    var isNotifyUser: Bool { nameKey == "notify_user" }
+
+    static func from(_ dto: PostActionTypeJSON) -> PostFlagType? {
+        guard dto.isFlag == true,
+              let nameKey = dto.nameKey,
+              let name = dto.name,
+              !name.isEmpty else { return nil }
+        return PostFlagType(
+            id: dto.id,
+            nameKey: nameKey,
+            name: name,
+            requiresMessage: dto.requireMessage ?? false,
+            enabled: dto.enabled ?? true,
+            appliesTo: dto.appliesTo ?? []
+        )
+    }
+}
+
+enum PostActionKind: String, Hashable {
+    case reaction
+    case bookmark
+    case boost
+    case report
+    case edit
+    case delete
+    case recover
+    case wiki
+    case solution
+    case sharedIssue
+}
+
+struct PostItem: Identifiable, Hashable {
+    var id: Int
+    var topicID: Int
+    var postNumber: Int
+    var username: String
+    var name: String?
+    var userID: Int?
+    var avatarTemplate: String?
+    var createdAt: Date?
+    var cookedHTML: String
+    var raw: String?
+    var replyToPostNumber: Int?
+    var postType: Int?
+    var replyCount: Int
+    var likeCount: Int
+    var yours: Bool
+    var canEdit: Bool
+    var canDelete: Bool
+    var canRecover: Bool
+    var canWiki: Bool
+    var wiki: Bool
+    var canFlag: Bool
+    var canBookmark: Bool
+    var actionsSummary: [PostActionSummary]
+    var reactionsEnabled: Bool
+    var reactions: [PostReaction]
+    var reactionUsersCount: Int
+    var currentUserReaction: String?
+    var boosts: [PostBoost]
+    var canBoost: Bool
+    var bookmarked: Bool
+    var bookmarkID: Int?
+    var bookmarkName: String?
+    var bookmarkReminderAt: Date?
+    var bookmarkAutoDeletePreference: BookmarkAutoDeletePreference
+    var canAcceptAnswer: Bool
+    var acceptedAnswer: Bool
+    var deletedAt: Date?
+    var version: Int
+    var readersCount: Int
+    var hidden: Bool
+    var read: Bool?
+
+    var likeAction: PostActionSummary? {
+        actionsSummary.first { $0.id == 2 }
+    }
+
+    var isLiked: Bool {
+        if reactionsEnabled { return currentUserReaction != nil }
+        return likeAction?.acted == true
+    }
+
+    var canToggleLike: Bool {
+        if reactionsEnabled {
+            guard let likeAction else { return true }
+            return likeAction.canAct || likeAction.canUndo
+        }
+        guard let likeAction else { return false }
+        return likeAction.canAct || likeAction.canUndo
+    }
 }
 
 struct TopicDetail: Identifiable, Hashable {
-    let id: Int
-    let title: String
-    let slug: String
-    let postsCount: Int
-    let categoryID: Int?
-    let tags: [String]
-    let closed: Bool
-    let archived: Bool
-    let pinned: Bool
-    let posts: [PostItem]
-    let postStreamIDs: [Int]
-    let chunkSize: Int?
-    let deletedBy: String?
-    let lastReadPostNumber: Int?
-    let highestPostNumber: Int?
+    var id: Int
+    var title: String
+    var slug: String
+    var postsCount: Int
+    var categoryID: Int?
+    var tags: [String]
+    var closed: Bool
+    var archived: Bool
+    var pinned: Bool
+    var canCreatePost: Bool
+    var bookmarked: Bool
+    var sharedIssueVisible: Bool
+    var canCreateSharedIssue: Bool
+    var userCreatedSharedIssue: Bool
+    var sharedIssueCount: Int
+    var posts: [PostItem]
+    var postStreamIDs: [Int]
+    var chunkSize: Int?
+    var deletedBy: String?
+    var lastReadPostNumber: Int?
+    var highestPostNumber: Int?
 
     static func from(dto: TopicDetailJSON, posts postDTOs: [PostJSON]? = nil) -> TopicDetail {
+        let bookmarksByPostID: [Int: BookmarkJSON] = Dictionary(
+            uniqueKeysWithValues: (dto.bookmarks ?? []).compactMap { bookmark in
+                guard bookmark.bookmarkableType == "Post",
+                      let postID = bookmark.bookmarkableId else { return nil }
+                return (postID, bookmark) as (Int, BookmarkJSON)
+            }
+        )
         let posts = (postDTOs ?? dto.postStream?.posts ?? [])
-            .map { PostItem.from(dto: $0, topicID: dto.id) }
+            .map {
+                PostItem.from(
+                    dto: $0,
+                    topicID: dto.id,
+                    bookmark: bookmarksByPostID[$0.id]
+                )
+            }
             .sorted { $0.postNumber < $1.postNumber }
         return TopicDetail(
             id: dto.id,
@@ -128,6 +298,12 @@ struct TopicDetail: Identifiable, Hashable {
             closed: dto.closed ?? false,
             archived: dto.archived ?? false,
             pinned: dto.pinned ?? false,
+            canCreatePost: dto.details?.canCreatePost ?? dto.canCreatePost ?? false,
+            bookmarked: dto.bookmarked ?? false,
+            sharedIssueVisible: dto.sharedIssueVisible ?? false,
+            canCreateSharedIssue: dto.canCreateSharedIssue ?? false,
+            userCreatedSharedIssue: dto.userCreatedSharedIssue ?? false,
+            sharedIssueCount: dto.sharedIssueCount ?? 0,
             posts: posts,
             postStreamIDs: dto.postStream?.stream ?? posts.map(\.id),
             chunkSize: dto.chunkSize,
@@ -154,6 +330,12 @@ struct TopicDetail: Identifiable, Hashable {
             closed: false,
             archived: false,
             pinned: false,
+            canCreatePost: false,
+            bookmarked: false,
+            sharedIssueVisible: false,
+            canCreateSharedIssue: false,
+            userCreatedSharedIssue: false,
+            sharedIssueCount: 0,
             posts: posts,
             postStreamIDs: posts.map(\.id),
             chunkSize: posts.count,
@@ -185,6 +367,12 @@ struct TopicDetail: Identifiable, Hashable {
             closed: closed,
             archived: archived,
             pinned: pinned,
+            canCreatePost: canCreatePost,
+            bookmarked: bookmarked,
+            sharedIssueVisible: sharedIssueVisible,
+            canCreateSharedIssue: canCreateSharedIssue,
+            userCreatedSharedIssue: userCreatedSharedIssue,
+            sharedIssueCount: sharedIssueCount,
             posts: merged,
             postStreamIDs: postStreamIDs,
             chunkSize: chunkSize,
@@ -218,6 +406,16 @@ struct TopicDetail: Identifiable, Hashable {
 struct ReplyOutcome {
     let post: PostItem?
     let pending: Bool
+}
+
+struct BookmarkSaveResult {
+    let bookmarkID: Int?
+    let topicBookmarked: Bool?
+}
+
+struct SharedIssueResult {
+    let created: Bool
+    let count: Int
 }
 
 extension TopicSummary {
@@ -316,8 +514,16 @@ extension TopicSummary {
 }
 
 extension PostItem {
-    static func from(dto: PostJSON, topicID: Int) -> PostItem {
-        PostItem(
+    static func from(
+        dto: PostJSON,
+        topicID: Int,
+        bookmark: BookmarkJSON? = nil
+    ) -> PostItem {
+        let actions = (dto.actionsSummary ?? []).map(PostActionSummary.from)
+        let defaultCanFlag = actions.contains {
+            $0.id != 2 && ($0.canAct || $0.canUndo)
+        }
+        return PostItem(
             id: dto.id,
             topicID: topicID,
             postNumber: dto.postNumber ?? 0,
@@ -327,9 +533,47 @@ extension PostItem {
             avatarTemplate: dto.avatarTemplate,
             createdAt: dto.createdAt,
             cookedHTML: dto.cooked ?? "",
+            raw: dto.raw,
             replyToPostNumber: dto.replyToPostNumber,
             postType: dto.postType,
+            replyCount: dto.replyCount ?? 0,
+            likeCount: dto.likeCount ?? 0,
+            yours: dto.yours ?? false,
+            canEdit: dto.canEdit ?? false,
+            canDelete: dto.canDelete ?? false,
+            canRecover: dto.canRecover ?? false,
+            canWiki: dto.canWiki ?? false,
+            wiki: dto.wiki ?? false,
+            canFlag: dto.canFlag ?? defaultCanFlag,
+            canBookmark: dto.canBookmark ?? true,
+            actionsSummary: actions,
+            reactionsEnabled: dto.reactions != nil
+                || dto.reactionUsersCount != nil
+                || dto.currentUserReaction != nil,
+            reactions: (dto.reactions ?? []).compactMap { reaction in
+                guard let id = reaction.id, !id.isEmpty else { return nil }
+                return PostReaction(id: id, count: reaction.count ?? 0)
+            },
+            reactionUsersCount: dto.reactionUsersCount ?? 0,
+            currentUserReaction: dto.currentUserReaction?.id.flatMap {
+                $0.isEmpty ? nil : $0
+            },
+            boosts: (dto.boosts ?? []).compactMap(PostBoost.from),
+            canBoost: dto.canBoost ?? false,
+            bookmarked: dto.bookmarked ?? (bookmark != nil),
+            bookmarkID: dto.bookmarkId ?? bookmark?.id,
+            bookmarkName: bookmark?.name,
+            bookmarkReminderAt: bookmark?.reminderAt,
+            bookmarkAutoDeletePreference: BookmarkAutoDeletePreference(
+                rawValue: bookmark?.autoDeletePreference ?? 3
+            ) ?? .clearReminder,
+            canAcceptAnswer: (dto.canAcceptAnswer ?? false)
+                || (dto.canUnacceptAnswer ?? false),
             acceptedAnswer: dto.acceptedAnswer ?? false,
+            deletedAt: dto.deletedAt,
+            version: dto.version ?? 1,
+            readersCount: dto.readersCount ?? 0,
+            hidden: dto.hidden ?? false,
             read: dto.read
         )
     }
@@ -348,9 +592,37 @@ extension PostItem {
             avatarTemplate: nil,
             createdAt: item.publishedAt,
             cookedHTML: RSSHTML.cleanedPostBody(item.html),
+            raw: nil,
             replyToPostNumber: nil,
             postType: 1,
+            replyCount: 0,
+            likeCount: 0,
+            yours: false,
+            canEdit: false,
+            canDelete: false,
+            canRecover: false,
+            canWiki: false,
+            wiki: false,
+            canFlag: false,
+            canBookmark: false,
+            actionsSummary: [],
+            reactionsEnabled: false,
+            reactions: [],
+            reactionUsersCount: 0,
+            currentUserReaction: nil,
+            boosts: [],
+            canBoost: false,
+            bookmarked: false,
+            bookmarkID: nil,
+            bookmarkName: nil,
+            bookmarkReminderAt: nil,
+            bookmarkAutoDeletePreference: .clearReminder,
+            canAcceptAnswer: false,
             acceptedAnswer: false,
+            deletedAt: nil,
+            version: 1,
+            readersCount: 0,
+            hidden: false,
             read: nil
         )
     }
@@ -494,10 +766,17 @@ struct TopicDetailJSON: Decodable {
     let deletedAt: Date?
     let userId: Int?
     let pinned: Bool?
+    let bookmarked: Bool?
+    let canCreatePost: Bool?
+    let sharedIssueVisible: Bool?
+    let canCreateSharedIssue: Bool?
+    let userCreatedSharedIssue: Bool?
+    let sharedIssueCount: Int?
     let tags: [TopicTagJSON]?
     let chunkSize: Int?
     let postStream: PostStreamJSON?
     let details: TopicDetailsJSON?
+    let bookmarks: [BookmarkJSON]?
     let lastReadPostNumber: Int?
     let highestPostNumber: Int?
 }
@@ -514,10 +793,12 @@ struct PostJSON: Decodable {
     let avatarTemplate: String?
     let createdAt: Date?
     let cooked: String?
+    let raw: String?
     let postNumber: Int?
     let postType: Int?
     let updatedAt: Date?
     let replyCount: Int?
+    let likeCount: Int?
     let replyToPostNumber: Int?
     let quoteCount: Int?
     let incomingLinkCount: Int?
@@ -535,8 +816,23 @@ struct PostJSON: Decodable {
     let canDelete: Bool?
     let canRecover: Bool?
     let canWiki: Bool?
+    let wiki: Bool?
+    let canFlag: Bool?
+    let canBookmark: Bool?
+    let actionsSummary: [PostActionSummaryJSON]?
+    let reactions: [PostReactionJSON]?
+    let reactionUsersCount: Int?
+    let currentUserReaction: CurrentUserReactionJSON?
+    let boosts: [PostBoostJSON]?
+    let canBoost: Bool?
+    let bookmarked: Bool?
+    let bookmarkId: Int?
+    let canAcceptAnswer: Bool?
+    let canUnacceptAnswer: Bool?
     let userId: Int?
     let acceptedAnswer: Bool?
+    let deletedAt: Date?
+    let hidden: Bool?
     let read: Bool?
 }
 
@@ -544,6 +840,79 @@ struct TopicDetailsJSON: Decodable {
     let createdBy: UserJSON?
     let lastPoster: UserJSON?
     let deletedBy: UserJSON?
+    let canCreatePost: Bool?
+    let canDelete: Bool?
+    let canRecover: Bool?
+}
+
+struct PostActionSummaryJSON: Decodable {
+    let id: Int
+    let count: Int?
+    let acted: Bool?
+    let canAct: Bool?
+    let canUndo: Bool?
+}
+
+struct PostReactionJSON: Decodable {
+    let id: String?
+    let type: String?
+    let count: Int?
+}
+
+struct CurrentUserReactionJSON: Decodable {
+    let id: String?
+    let type: String?
+    let canUndo: Bool?
+}
+
+struct PostBoostJSON: Decodable {
+    let id: Int?
+    let cooked: String?
+    let user: BoostUserJSON?
+}
+
+struct BoostUserJSON: Decodable {
+    let id: Int?
+    let username: String?
+    let name: String?
+    let avatarTemplate: String?
+}
+
+struct BookmarkJSON: Decodable {
+    let id: Int?
+    let name: String?
+    let reminderAt: Date?
+    let autoDeletePreference: Int?
+    let bookmarkableId: Int?
+    let bookmarkableType: String?
+}
+
+struct SiteJSON: Decodable {
+    let postActionTypes: [PostActionTypeJSON]?
+}
+
+struct PostActionTypeJSON: Decodable {
+    let id: Int
+    let nameKey: String?
+    let name: String?
+    let isFlag: Bool?
+    let requireMessage: Bool?
+    let enabled: Bool?
+    let appliesTo: [String]?
+}
+
+struct BookmarkMutationResponseJSON: Decodable {
+    let id: Int?
+    let topicBookmarked: Bool?
+}
+
+struct PostActionMutationResponseJSON: Decodable {
+    let result: [PostActionSummaryJSON]?
+}
+
+struct SharedIssueResponseJSON: Decodable {
+    let count: Int?
+    let userCreatedSharedIssue: Bool?
 }
 
 struct TopicTagJSON: Decodable {
