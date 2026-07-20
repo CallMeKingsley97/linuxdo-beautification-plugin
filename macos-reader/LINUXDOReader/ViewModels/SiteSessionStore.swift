@@ -148,7 +148,7 @@ final class SiteSessionStore: NSObject, ObservableObject {
         load(Endpoints.baseURL)
     }
 
-    func refreshSession() {
+    func refreshSession(retryIfAnonymous: Bool = true) {
         prepareRequestHost()
         sessionTask?.cancel()
         sessionTask = Task { [weak self] in
@@ -156,12 +156,17 @@ final class SiteSessionStore: NSObject, ObservableObject {
             self.isSessionChecking = true
             defer { self.isSessionChecking = false }
             do {
-                let user = try await self.fetchCurrentUser()
+                var user = try await self.fetchCurrentUser()
+                if retryIfAnonymous, user == nil {
+                    for _ in 0..<3 {
+                        try await Task.sleep(for: .milliseconds(500))
+                        user = try await self.fetchCurrentUser()
+                        if user != nil { break }
+                    }
+                }
                 self.currentUser = user
                 if user != nil {
                     await self.persistSessionCookies()
-                } else {
-                    await SessionCookieVault.deleteAsync()
                 }
             } catch is CancellationError {
                 return
@@ -177,10 +182,59 @@ final class SiteSessionStore: NSObject, ObservableObject {
         body: Data? = nil,
         referrer: String? = nil
     ) async throws -> Data {
+        try await request(
+            path: path,
+            method: method,
+            body: body.flatMap { String(data: $0, encoding: .utf8) } ?? "",
+            contentType: "application/json",
+            referrer: referrer,
+            isBackground: false
+        )
+    }
+
+    func requestForm(
+        path: String,
+        method: String = "POST",
+        body: String,
+        referrer: String? = nil,
+        isBackground: Bool = false
+    ) async throws -> Data {
+        try await request(
+            path: path,
+            method: method,
+            body: body,
+            contentType: "application/x-www-form-urlencoded; charset=UTF-8",
+            referrer: referrer,
+            isBackground: isBackground
+        )
+    }
+
+    func requestEmpty(
+        path: String,
+        method: String,
+        referrer: String? = nil
+    ) async throws -> Data {
+        try await request(
+            path: path,
+            method: method,
+            body: "",
+            contentType: "",
+            referrer: referrer,
+            isBackground: false
+        )
+    }
+
+    private func request(
+        path: String,
+        method: String,
+        body: String,
+        contentType requestContentType: String,
+        referrer: String?,
+        isBackground: Bool
+    ) async throws -> Data {
         prepareRequestHost()
         try await waitForRequestHost()
 
-        let bodyString = body.flatMap { String(data: $0, encoding: .utf8) } ?? ""
         let functionBody = """
         const requestURL = new URL(path, window.location.origin);
         const headers = {
@@ -205,12 +259,20 @@ final class SiteSessionStore: NSObject, ObservableObject {
             const csrfPayload = await csrfResponse.json();
             csrf = csrfPayload && csrfPayload.csrf ? csrfPayload.csrf : '';
           } catch (_) {}
-          headers['Content-Type'] = 'application/json';
+          if (requestContentType.length > 0) {
+            headers['Content-Type'] = requestContentType;
+          }
           headers['X-CSRF-Token'] = csrf;
           headers['X-Requested-With'] = 'XMLHttpRequest';
           headers['Discourse-Present'] = 'true';
           headers['Discourse-Logged-In'] = 'true';
-          options.body = body;
+          if (isBackground) {
+            headers['X-SILENCE-LOGGER'] = 'true';
+            headers['Discourse-Background'] = 'true';
+          }
+          if (body.length > 0) {
+            options.body = body;
+          }
           if (referrer.length > 0) {
             options.referrer = referrer;
             options.referrerPolicy = 'strict-origin-when-cross-origin';
@@ -234,8 +296,10 @@ final class SiteSessionStore: NSObject, ObservableObject {
             arguments: [
                 "path": path,
                 "method": method.uppercased(),
-                "body": bodyString,
+                "body": body,
+                "requestContentType": requestContentType,
                 "referrer": referrer ?? "",
+                "isBackground": isBackground,
             ],
             in: nil,
             contentWorld: .page
@@ -345,7 +409,6 @@ final class SiteSessionStore: NSObject, ObservableObject {
         guard !didRestorePersistedCookies else { return }
         didRestorePersistedCookies = true
         guard let records = await SessionCookieVault.loadAsync(), !records.isEmpty else { return }
-
         let store = requestWebView.configuration.websiteDataStore.httpCookieStore
         for record in records {
             guard record.expiresAt.map({ $0 > Date() }) ?? true,
@@ -366,11 +429,13 @@ final class SiteSessionStore: NSObject, ObservableObject {
             }
         }
         let records = cookies
-            .filter { cookie in
-                cookie.domain == "linux.do" || cookie.domain.hasSuffix(".linux.do")
-            }
+            .filter(Self.isLinuxDOCookie)
             .compactMap(SessionCookieRecord.init)
         await SessionCookieVault.saveAsync(records)
+    }
+
+    private static func isLinuxDOCookie(_ cookie: HTTPCookie) -> Bool {
+        cookie.domain == "linux.do" || cookie.domain.hasSuffix(".linux.do")
     }
 
     private func syncState(_ webView: WKWebView) {
@@ -413,14 +478,14 @@ extension SiteSessionStore: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if webView === requestWebView {
             requestHostReady = webView.url?.host == Endpoints.baseURL.host
-            if requestHostReady { refreshSession() }
+            if requestHostReady { refreshSession(retryIfAnonymous: false) }
             return
         }
 
         isLoading = false
         syncState(webView)
         if webView.url?.host == Endpoints.baseURL.host {
-            refreshSession()
+            refreshSession(retryIfAnonymous: true)
             if webView.url?.path.hasPrefix("/login") == true {
                 startLoginPolling()
             }

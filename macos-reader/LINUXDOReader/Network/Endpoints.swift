@@ -61,6 +61,88 @@ enum Endpoints {
             .appendingPathComponent("following.json")
     }
 
+    static func userProfile(username: String) -> URL {
+        baseURL
+            .appendingPathComponent("u")
+            .appendingPathComponent(username)
+            .appendingPathExtension("json")
+    }
+
+    static func userSummary(username: String) -> URL {
+        baseURL
+            .appendingPathComponent("u")
+            .appendingPathComponent(username)
+            .appendingPathComponent("summary.json")
+    }
+
+    static func userPage(username: String) -> URL {
+        baseURL
+            .appendingPathComponent("u")
+            .appendingPathComponent(username)
+            .appendingPathComponent("summary")
+    }
+
+    static func userActions(username: String, filter: String, offset: Int) -> URL {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("user_actions.json"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [
+            URLQueryItem(name: "offset", value: String(max(0, offset))),
+            URLQueryItem(name: "username", value: username),
+            URLQueryItem(name: "filter", value: filter),
+        ]
+        return components.url!
+    }
+
+    static func userBadges(username: String) -> URL {
+        var components = URLComponents(
+            url: baseURL
+                .appendingPathComponent("user-badges")
+                .appendingPathComponent(username)
+                .appendingPathExtension("json"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [URLQueryItem(name: "grouped", value: "true")]
+        return components.url!
+    }
+
+    static func solvedPosts(username: String, offset: Int, limit: Int = 20) -> URL {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("solution/by_user.json"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [
+            URLQueryItem(name: "username", value: username),
+            URLQueryItem(name: "offset", value: String(max(0, offset))),
+            URLQueryItem(name: "limit", value: String(max(1, limit))),
+        ]
+        return components.url!
+    }
+
+    static func endorsableCategories(username: String) -> URL {
+        baseURL
+            .appendingPathComponent("category-experts/endorsable-categories")
+            .appendingPathComponent(username)
+            .appendingPathExtension("json")
+    }
+
+    static func notifications(offset: Int = 0, limit: Int = 60) -> URL {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("notifications.json"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [
+            URLQueryItem(name: "offset", value: String(max(0, offset))),
+            URLQueryItem(name: "limit", value: String(min(max(1, limit), 60))),
+        ]
+        return components.url!
+    }
+
+    static func notificationTotals() -> URL {
+        baseURL.appendingPathComponent("notifications/totals.json")
+    }
+
     static func latestRSS() -> URL {
         baseURL.appendingPathComponent("latest.rss")
     }

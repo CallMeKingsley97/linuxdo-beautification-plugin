@@ -19,7 +19,6 @@ struct LINUXDOReaderApp: App {
         .windowToolbarStyle(UnifiedWindowToolbarStyle(showsTitle: false))
         .windowResizability(.contentMinSize)
         .commands {
-            CommandGroup(replacing: .newItem) {}
             CommandMenu("浏览") {
                 Button("刷新当前列表") {
                     appState.refreshList()
@@ -37,6 +36,22 @@ struct LINUXDOReaderApp: App {
                     appState.selectHot()
                 }
                 .keyboardShortcut("2", modifiers: [.command])
+
+                Button("通知") {
+                    appState.select(.notifications)
+                }
+                .keyboardShortcut("3", modifiers: [.command])
+
+                Button("登录与验证") {
+                    appState.openLogin()
+                }
+                .keyboardShortcut("4", modifiers: [.command])
+
+                Divider()
+
+                Button("检查登录状态") {
+                    appState.siteSession.refreshSession()
+                }
             }
         }
 

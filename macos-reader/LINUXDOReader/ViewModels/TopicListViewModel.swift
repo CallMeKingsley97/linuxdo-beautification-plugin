@@ -159,14 +159,7 @@ final class TopicListViewModel: ObservableObject {
             return try await api.fetchLatest(page: page, force: force)
         case .hot:
             return try await api.fetchHot(page: page, force: force)
-        case .site:
-            return TopicListPage(
-                topics: [],
-                usersByID: [:],
-                canCreateTopic: false,
-                hasMore: false
-            )
-        case .settings:
+        case .site, .settings, .notifications:
             return TopicListPage(
                 topics: [],
                 usersByID: [:],

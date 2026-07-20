@@ -146,10 +146,254 @@ final class APIClient {
             .sorted { $0.postNumber < $1.postNumber }
     }
 
+    func reportTopicTimings(
+        topicID: Int,
+        timings: [Int: Int],
+        topicTime: Int
+    ) async throws {
+        guard !timings.isEmpty else { return }
+
+        var parts = timings.keys.sorted().map { postNumber in
+            let milliseconds = max(1, timings[postNumber] ?? 0)
+            return "timings%5B\(postNumber)%5D=\(milliseconds)"
+        }
+        parts.append("topic_time=\(max(0, topicTime))")
+        parts.append("topic_id=\(topicID)")
+
+        _ = try await siteSession.requestForm(
+            path: "/topics/timings",
+            body: parts.joined(separator: "&"),
+            referrer: Endpoints.topicPage(id: topicID).absoluteString,
+            isBackground: true
+        )
+    }
+
     func fetchFollowedUsernames(username: String) async throws -> [String] {
         let url = Endpoints.following(username: username)
         let data = try await siteSession.requestJSON(path: url.path)
         return try Self.decodeFollowedUsernames(data)
+    }
+
+    func fetchUserProfile(username: String, force: Bool = false) async throws -> UserProfileDetail {
+        let response: UserProfileResponseJSON = try await getJSON(
+            url: Endpoints.userProfile(username: username),
+            ttl: 60,
+            force: force
+        )
+        guard let user = response.user else {
+            throw LDOError.decoding("用户资料响应为空")
+        }
+        return try UserProfileDetail.from(user)
+    }
+
+    func fetchUserProfileSummary(
+        username: String,
+        force: Bool = false
+    ) async throws -> UserProfileSummary {
+        let response: UserProfileSummaryResponseJSON = try await getJSON(
+            url: Endpoints.userSummary(username: username),
+            ttl: 60,
+            force: force
+        )
+        return try UserProfileSummary.from(response)
+    }
+
+    func fetchUserActivity(
+        username: String,
+        filter: UserActivityFilter,
+        offset: Int,
+        force: Bool = false
+    ) async throws -> UserActivityPage {
+        let response: UserActionsResponseJSON = try await getJSON(
+            url: Endpoints.userActions(username: username, filter: filter.rawValue, offset: offset),
+            ttl: 30,
+            force: force
+        )
+        let source = response.userActions ?? []
+        let items = source.compactMap { action -> UserActivityItem? in
+            guard let actionType = action.actionType,
+                  let topicID = action.topicId,
+                  let title = action.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !title.isEmpty else { return nil }
+            let author: UserSummary? = {
+                guard let username = action.username?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !username.isEmpty else { return nil }
+                return UserSummary(
+                    id: action.userId ?? 0,
+                    username: username,
+                    name: action.name,
+                    avatarTemplate: action.avatarTemplate
+                )
+            }()
+            return UserActivityItem(
+                actionType: actionType,
+                topicID: topicID,
+                postNumber: action.postNumber,
+                title: title,
+                excerpt: LDOHTMLText.plainText(action.excerpt) ?? "",
+                categoryID: action.categoryId,
+                createdAt: action.createdAt,
+                author: author
+            )
+        }
+        return UserActivityPage(items: items, hasMore: source.count >= 30)
+    }
+
+    func fetchUserBadges(username: String, force: Bool = false) async throws -> [UserBadgeGroup] {
+        let response: UserBadgesResponseJSON = try await getJSON(
+            url: Endpoints.userBadges(username: username),
+            ttl: 300,
+            force: force
+        )
+        let definitions = Dictionary(
+            uniqueKeysWithValues: (response.badges ?? []).compactMap { badge -> (Int, UserBadgeDefinitionJSON)? in
+                guard let id = badge.id else { return nil }
+                return (id, badge)
+            }
+        )
+        let typeNames = Dictionary(
+            uniqueKeysWithValues: (response.badgeTypes ?? []).compactMap { type -> (Int, String)? in
+                guard let id = type.id, let name = type.name, !name.isEmpty else { return nil }
+                return (id, name)
+            }
+        )
+        let badges = (response.userBadges ?? []).compactMap { record -> UserBadgeItem? in
+            guard let badgeID = record.badgeId, let definition = definitions[badgeID] else { return nil }
+            return UserBadgeItem.from(
+                definition: definition,
+                count: record.count,
+                grantedAt: record.grantedAt
+            )
+        }
+        let grouped = Dictionary(grouping: badges, by: \.badgeTypeID)
+        let orderedTypeIDs = [1, 2, 3] + grouped.keys.filter { ![1, 2, 3].contains($0) }.sorted()
+        return orderedTypeIDs.compactMap { typeID in
+            guard let badges = grouped[typeID], !badges.isEmpty else { return nil }
+            let fallbackName: String
+            switch typeID {
+            case 1: fallbackName = "金牌徽章"
+            case 2: fallbackName = "银牌徽章"
+            default: fallbackName = "铜牌徽章"
+            }
+            return UserBadgeGroup(
+                id: typeID,
+                name: typeNames[typeID] ?? fallbackName,
+                badges: badges
+            )
+        }
+    }
+
+    func fetchSolvedPosts(username: String, offset: Int) async throws -> SolvedPostPage {
+        let response: SolvedPostsResponseJSON = try await getJSON(
+            url: Endpoints.solvedPosts(username: username, offset: offset),
+            ttl: 60,
+            force: false
+        )
+        let source = response.userSolvedPosts ?? []
+        let items = source.compactMap { post -> SolvedPostItem? in
+            guard let postID = post.postId,
+                  let topicID = post.topicId,
+                  let postNumber = post.postNumber,
+                  let title = post.topicTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !title.isEmpty else { return nil }
+            return SolvedPostItem(
+                postID: postID,
+                topicID: topicID,
+                postNumber: postNumber,
+                topicTitle: title,
+                slug: post.slug,
+                excerpt: LDOHTMLText.plainText(post.excerpt) ?? "",
+                categoryID: post.categoryId,
+                createdAt: post.createdAt
+            )
+        }
+        return SolvedPostPage(items: items, hasMore: source.count >= 20)
+    }
+
+    func fetchEndorsableCategories(username: String) async throws -> EndorsableCategoriesResult {
+        let response: EndorsableCategoriesResponseJSON = try await getJSON(
+            url: Endpoints.endorsableCategories(username: username),
+            ttl: nil,
+            force: true
+        )
+        let categories = (response.categories ?? []).compactMap { category -> EndorsableCategory? in
+            guard let id = category.id,
+                  let name = category.name?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !name.isEmpty else { return nil }
+            return EndorsableCategory(id: id, name: name, color: category.color)
+        }
+        return EndorsableCategoriesResult(
+            categories: categories,
+            remainingEndorsements: response.extras?.remainingEndorsements ?? 0
+        )
+    }
+
+    func setFollowing(_ following: Bool, username: String) async throws {
+        let path = "/follow/\(Self.encodedPathComponent(username)).json"
+        _ = try await siteSession.requestEmpty(
+            path: path,
+            method: following ? "PUT" : "DELETE",
+            referrer: Endpoints.userPage(username: username).absoluteString
+        )
+    }
+
+    func endorse(username: String, categoryIDs: Set<Int>) async throws {
+        guard !categoryIDs.isEmpty else {
+            throw LDOError.decoding("请至少选择一个认可类别")
+        }
+        let body = categoryIDs.sorted()
+            .map { "categoryIds%5B%5D=\($0)" }
+            .joined(separator: "&")
+        _ = try await siteSession.requestForm(
+            path: "/category-experts/endorse/\(Self.encodedPathComponent(username)).json",
+            method: "PUT",
+            body: body,
+            referrer: Endpoints.userPage(username: username).absoluteString
+        )
+    }
+
+    func fetchNotifications(offset: Int = 0, limit: Int = 60) async throws -> NotificationPage {
+        let response: NotificationsResponseJSON = try await getJSON(
+            url: Endpoints.notifications(offset: offset, limit: limit),
+            ttl: nil,
+            force: true
+        )
+        let items = (response.notifications ?? []).compactMap(LDOUserNotification.from)
+        let totalCount = response.totalRowsNotifications ?? (offset + items.count)
+        let hasMore = response.totalRowsNotifications.map {
+            offset + items.count < $0
+        } ?? (items.count >= limit)
+        return NotificationPage(
+            items: items,
+            totalCount: totalCount,
+            hasMore: hasMore
+        )
+    }
+
+    func fetchNotificationTotals() async throws -> NotificationTotals {
+        let response: NotificationTotalsJSON = try await getJSON(
+            url: Endpoints.notificationTotals(),
+            ttl: nil,
+            force: true
+        )
+        return NotificationTotals.from(response)
+    }
+
+    func markNotificationRead(id: Int) async throws {
+        _ = try await siteSession.requestForm(
+            path: "/notifications/mark-read.json",
+            method: "PUT",
+            body: "id=\(id)",
+            referrer: Endpoints.baseURL.absoluteString
+        )
+    }
+
+    func markAllNotificationsRead() async throws {
+        _ = try await siteSession.requestEmpty(
+            path: "/notifications/mark-read.json",
+            method: "PUT",
+            referrer: Endpoints.baseURL.absoluteString
+        )
     }
 
     func createReply(
@@ -320,6 +564,10 @@ final class APIClient {
                 ?? (user["userName"] as? String)
         }
         return Array(Set(usernames)).sorted()
+    }
+
+    nonisolated private static func encodedPathComponent(_ value: String) -> String {
+        value.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? value
     }
 }
 

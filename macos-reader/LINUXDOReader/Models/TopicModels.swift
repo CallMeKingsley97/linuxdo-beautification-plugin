@@ -94,6 +94,7 @@ struct PostItem: Identifiable, Hashable {
     let replyToPostNumber: Int?
     let postType: Int?
     let acceptedAnswer: Bool
+    let read: Bool?
 }
 
 struct TopicDetail: Identifiable, Hashable {
@@ -110,6 +111,8 @@ struct TopicDetail: Identifiable, Hashable {
     let postStreamIDs: [Int]
     let chunkSize: Int?
     let deletedBy: String?
+    let lastReadPostNumber: Int?
+    let highestPostNumber: Int?
 
     static func from(dto: TopicDetailJSON, posts postDTOs: [PostJSON]? = nil) -> TopicDetail {
         let posts = (postDTOs ?? dto.postStream?.posts ?? [])
@@ -128,7 +131,9 @@ struct TopicDetail: Identifiable, Hashable {
             posts: posts,
             postStreamIDs: dto.postStream?.stream ?? posts.map(\.id),
             chunkSize: dto.chunkSize,
-            deletedBy: dto.details?.deletedBy?.username
+            deletedBy: dto.details?.deletedBy?.username,
+            lastReadPostNumber: dto.lastReadPostNumber,
+            highestPostNumber: dto.highestPostNumber
         )
     }
 
@@ -152,7 +157,9 @@ struct TopicDetail: Identifiable, Hashable {
             posts: posts,
             postStreamIDs: posts.map(\.id),
             chunkSize: posts.count,
-            deletedBy: nil
+            deletedBy: nil,
+            lastReadPostNumber: nil,
+            highestPostNumber: posts.map(\.postNumber).max()
         )
     }
 
@@ -167,12 +174,12 @@ struct TopicDetail: Identifiable, Hashable {
             byID[post.id] = post
         }
         let merged = byID.values.sorted { $0.postNumber < $1.postNumber }
-        let highestPostNumber = merged.map(\.postNumber).max() ?? 0
+        let loadedHighestPostNumber = merged.map(\.postNumber).max() ?? 0
         return TopicDetail(
             id: id,
             title: title,
             slug: slug,
-            postsCount: max(postsCount, highestPostNumber),
+            postsCount: max(postsCount, loadedHighestPostNumber),
             categoryID: categoryID,
             tags: tags,
             closed: closed,
@@ -181,8 +188,30 @@ struct TopicDetail: Identifiable, Hashable {
             posts: merged,
             postStreamIDs: postStreamIDs,
             chunkSize: chunkSize,
-            deletedBy: deletedBy
+            deletedBy: deletedBy,
+            lastReadPostNumber: lastReadPostNumber,
+            highestPostNumber: max(highestPostNumber ?? 0, loadedHighestPostNumber)
         )
+    }
+
+    var hasServerReadState: Bool {
+        lastReadPostNumber != nil || posts.contains { $0.read != nil }
+    }
+
+    var initiallyReadPostNumbers: Set<Int> {
+        let watermark = lastReadPostNumber
+        return Set(posts.compactMap { post in
+            if post.read == true {
+                return post.postNumber
+            }
+            if post.read == false {
+                return nil
+            }
+            if let watermark, post.postNumber <= watermark {
+                return post.postNumber
+            }
+            return nil
+        })
     }
 }
 
@@ -300,7 +329,8 @@ extension PostItem {
             cookedHTML: dto.cooked ?? "",
             replyToPostNumber: dto.replyToPostNumber,
             postType: dto.postType,
-            acceptedAnswer: dto.acceptedAnswer ?? false
+            acceptedAnswer: dto.acceptedAnswer ?? false,
+            read: dto.read
         )
     }
 
@@ -320,7 +350,8 @@ extension PostItem {
             cookedHTML: RSSHTML.cleanedPostBody(item.html),
             replyToPostNumber: nil,
             postType: 1,
-            acceptedAnswer: false
+            acceptedAnswer: false,
+            read: nil
         )
     }
 }
@@ -467,6 +498,8 @@ struct TopicDetailJSON: Decodable {
     let chunkSize: Int?
     let postStream: PostStreamJSON?
     let details: TopicDetailsJSON?
+    let lastReadPostNumber: Int?
+    let highestPostNumber: Int?
 }
 
 struct PostStreamJSON: Decodable {
@@ -504,6 +537,7 @@ struct PostJSON: Decodable {
     let canWiki: Bool?
     let userId: Int?
     let acceptedAnswer: Bool?
+    let read: Bool?
 }
 
 struct TopicDetailsJSON: Decodable {

@@ -357,6 +357,8 @@ struct CookedHTMLView: NSViewRepresentable {
 /// 将一个主题的楼层合并到单个 WKWebView，避免多 WebView 嵌套滚动和合成开销。
 struct TopicDocumentWebView: NSViewRepresentable {
     private static let replyMessageName = "replyPost"
+    private static let userProfileMessageName = "openUserProfile"
+    private static let readingVisibilityMessageName = "readingVisibility"
     // 与登录/请求 WebView 共用会话，确保等级受限帖子中的图片也能携带站内 Cookie。
     private static let contentDataStore = WKWebsiteDataStore.default()
 
@@ -364,8 +366,13 @@ struct TopicDocumentWebView: NSViewRepresentable {
     let followedUsernames: Set<String>
     let followedHighlightEnabled: Bool
     let followedColorHex: String
+    let readPostNumbers: Set<Int>
+    let reportingPostNumbers: Set<Int>
+    let targetPostNumber: Int?
     var onOpenTopic: ((Int) -> Void)?
+    var onOpenUser: ((PostItem) -> Void)?
     var onReply: ((PostItem) -> Void)?
+    var onVisiblePostsChanged: ((Set<Int>) -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -380,6 +387,14 @@ struct TopicDocumentWebView: NSViewRepresentable {
             context.coordinator,
             name: Self.replyMessageName
         )
+        configuration.userContentController.add(
+            context.coordinator,
+            name: Self.userProfileMessageName
+        )
+        configuration.userContentController.add(
+            context.coordinator,
+            name: Self.readingVisibilityMessageName
+        )
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.setValue(false, forKey: "drawsBackground")
@@ -393,17 +408,30 @@ struct TopicDocumentWebView: NSViewRepresentable {
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.parent = self
         let signature = documentSignature
-        guard context.coordinator.lastSignature != signature else { return }
+        guard context.coordinator.lastSignature != signature else {
+            context.coordinator.syncReadState(in: webView)
+            context.coordinator.scrollToTargetIfNeeded(in: webView)
+            return
+        }
 
+        let targetKey = targetPostNumber.map { "\(detail.id):\($0)" }
         let shouldRestoreScroll = context.coordinator.lastTopicID == detail.id
             && context.coordinator.lastSignature != nil
+            && (targetPostNumber == nil || context.coordinator.lastScrolledTarget == targetKey)
+        if context.coordinator.lastTopicID != detail.id {
+            context.coordinator.lastScrolledTarget = nil
+        }
         context.coordinator.lastSignature = signature
         context.coordinator.lastTopicID = detail.id
+        context.coordinator.documentReady = false
+        context.coordinator.lastReadStateSignature = nil
         let page = Self.documentHTML(
             detail: detail,
             followedUsernames: followedUsernames,
             followedHighlightEnabled: followedHighlightEnabled,
-            followedColorHex: followedColorHex
+            followedColorHex: followedColorHex,
+            readPostNumbers: readPostNumbers,
+            reportingPostNumbers: reportingPostNumbers
         )
 
         if shouldRestoreScroll {
@@ -412,7 +440,9 @@ struct TopicDocumentWebView: NSViewRepresentable {
                 webView.loadHTMLString(page, baseURL: Endpoints.baseURL)
             }
         } else {
-            context.coordinator.pendingScrollY = nil
+            // WKWebView 在连续 loadHTMLString 时可能沿用上一主题的滚动偏移；
+            // 新主题必须回到顶部，否则会把错误楼层误判为当前可见并上报已读。
+            context.coordinator.pendingScrollY = 0
             webView.loadHTMLString(page, baseURL: Endpoints.baseURL)
         }
     }
@@ -420,6 +450,12 @@ struct TopicDocumentWebView: NSViewRepresentable {
     static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
         nsView.configuration.userContentController.removeScriptMessageHandler(
             forName: Self.replyMessageName
+        )
+        nsView.configuration.userContentController.removeScriptMessageHandler(
+            forName: Self.userProfileMessageName
+        )
+        nsView.configuration.userContentController.removeScriptMessageHandler(
+            forName: Self.readingVisibilityMessageName
         )
         nsView.navigationDelegate = nil
         nsView.stopLoading()
@@ -440,32 +476,91 @@ struct TopicDocumentWebView: NSViewRepresentable {
         var lastSignature: String?
         var lastTopicID: Int?
         var pendingScrollY: Double?
+        var documentReady = false
+        var lastReadStateSignature: String?
+        var lastScrolledTarget: String?
 
         init(_ parent: TopicDocumentWebView) {
             self.parent = parent
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            guard let pendingScrollY else { return }
-            self.pendingScrollY = nil
-            webView.evaluateJavaScript(
-                "window.scrollTo({ top: \(pendingScrollY), behavior: 'auto' });"
-            )
+            documentReady = true
+            if let pendingScrollY {
+                self.pendingScrollY = nil
+                webView.evaluateJavaScript(
+                    "window.scrollTo({ top: \(pendingScrollY), behavior: 'auto' });"
+                )
+            }
+            scrollToTargetIfNeeded(in: webView)
+            syncReadState(in: webView, force: true)
+        }
+
+        func scrollToTargetIfNeeded(in webView: WKWebView) {
+            guard documentReady,
+                  let postNumber = parent.targetPostNumber,
+                  postNumber > 0 else { return }
+            let key = "\(parent.detail.id):\(postNumber)"
+            guard lastScrolledTarget != key else { return }
+            let script = """
+            (() => {
+              const element = document.getElementById('post-\(postNumber)');
+              if (!element) return false;
+              element.scrollIntoView({ block: 'start', behavior: 'auto' });
+              window.scrollBy(0, -12);
+              return true;
+            })();
+            """
+            webView.evaluateJavaScript(script) { [weak self] value, _ in
+                guard (value as? Bool) == true else { return }
+                self?.lastScrolledTarget = key
+            }
         }
 
         func userContentController(
             _ userContentController: WKUserContentController,
             didReceive message: WKScriptMessage
         ) {
-            guard message.name == TopicDocumentWebView.replyMessageName,
-                  let postNumber = TopicDocumentWebView.integer(from: message.body),
-                  let post = parent.detail.posts.first(where: {
-                      $0.postNumber == postNumber
-                  }),
-                  let onReply = parent.onReply else { return }
-            DispatchQueue.main.async {
-                onReply(post)
+            switch message.name {
+            case TopicDocumentWebView.replyMessageName:
+                guard let postNumber = TopicDocumentWebView.integer(from: message.body),
+                      let post = parent.detail.posts.first(where: {
+                          $0.postNumber == postNumber
+                      }),
+                      let onReply = parent.onReply else { return }
+                DispatchQueue.main.async {
+                    onReply(post)
+                }
+            case TopicDocumentWebView.userProfileMessageName:
+                guard let postNumber = TopicDocumentWebView.integer(from: message.body),
+                      let post = parent.detail.posts.first(where: {
+                          $0.postNumber == postNumber
+                      }),
+                      let onOpenUser = parent.onOpenUser else { return }
+                DispatchQueue.main.async {
+                    onOpenUser(post)
+                }
+            case TopicDocumentWebView.readingVisibilityMessageName:
+                guard let postNumbers = TopicDocumentWebView.postNumbers(from: message.body),
+                      let onVisiblePostsChanged = parent.onVisiblePostsChanged else { return }
+                DispatchQueue.main.async {
+                    onVisiblePostsChanged(postNumbers)
+                }
+            default:
+                break
             }
+        }
+
+        func syncReadState(in webView: WKWebView, force: Bool = false) {
+            guard documentReady else { return }
+            let read = parent.readPostNumbers.sorted()
+            let reporting = parent.reportingPostNumbers.sorted()
+            let signature = "\(read.map(String.init).joined(separator: ","))|\(reporting.map(String.init).joined(separator: ","))"
+            guard force || signature != lastReadStateSignature else { return }
+            lastReadStateSignature = signature
+
+            let script = "window.LDOReading?.setState(\(TopicDocumentWebView.javaScriptArray(read)), \(TopicDocumentWebView.javaScriptArray(reporting)));"
+            webView.evaluateJavaScript(script)
         }
 
         func webView(
@@ -501,7 +596,9 @@ struct TopicDocumentWebView: NSViewRepresentable {
         detail: TopicDetail,
         followedUsernames: Set<String>,
         followedHighlightEnabled: Bool,
-        followedColorHex: String
+        followedColorHex: String,
+        readPostNumbers: Set<Int>,
+        reportingPostNumbers: Set<Int>
     ) -> String {
         let stateBadges = [
             detail.pinned ? badgeHTML("置顶", className: "status-warning") : nil,
@@ -515,7 +612,9 @@ struct TopicDocumentWebView: NSViewRepresentable {
             postHTML(
                 post,
                 followedUsernames: followedUsernames,
-                followedHighlightEnabled: followedHighlightEnabled
+                followedHighlightEnabled: followedHighlightEnabled,
+                readPostNumbers: readPostNumbers,
+                reportingPostNumbers: reportingPostNumbers
             )
         }.joined(separator: "")
 
@@ -606,6 +705,26 @@ struct TopicDocumentWebView: NSViewRepresentable {
             font-size: 14px;
             font-weight: 650;
           }
+          .profile-button {
+            appearance: none;
+            border: 0;
+            padding: 0;
+            color: inherit;
+            background: transparent;
+            font: inherit;
+            text-align: left;
+            cursor: pointer;
+          }
+          .profile-button:focus-visible {
+            outline: 2px solid var(--link);
+            outline-offset: 2px;
+          }
+          .avatar-button {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+          }
+          .avatar-button:hover .avatar { filter: brightness(0.94); }
           .post-main { min-width: 0; }
           .post-heading {
             display: flex;
@@ -621,14 +740,45 @@ struct TopicDocumentWebView: NSViewRepresentable {
             font-size: 13px;
           }
           .author-name { font-weight: 650; }
+          .author-name:hover { color: var(--link); }
           .username { color: var(--muted); font-size: 12px; }
           .post-metadata {
             display: flex;
             flex-wrap: wrap;
+            align-items: center;
             gap: 7px;
             margin-top: 3px;
             color: var(--muted);
             font-size: 11px;
+          }
+          .read-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            flex: 0 0 8px;
+            border-radius: 50%;
+            background: #248a3d;
+            box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+            opacity: 1;
+            transform: scale(1);
+            transition: opacity 1.2s ease-in-out, transform 1.2s ease-in-out;
+          }
+          .post.is-read .read-indicator {
+            opacity: 0;
+            transform: scale(0.72);
+          }
+          .post.is-reporting:not(.is-read) .read-indicator {
+            animation: reading-pulse 1.4s ease-in-out infinite;
+          }
+          @keyframes reading-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.35; }
+          }
+          @media (prefers-color-scheme: dark) {
+            .read-indicator {
+              background: #30d158;
+              box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.12);
+            }
           }
           .reply-button {
             position: absolute;
@@ -649,36 +799,117 @@ struct TopicDocumentWebView: NSViewRepresentable {
           @media (max-width: 620px) {
             .topic-header { padding: 16px; }
             .post { padding: 16px; grid-template-columns: 32px minmax(0, 1fr); }
-            .avatar { width: 32px; height: 32px; }
+            .avatar, .avatar-button { width: 32px; height: 32px; }
             .reply-button { right: 12px; }
           }
         </style>
         """
 
-        let replyScript = """
+        let interactionScript = """
         <script>
           document.addEventListener('click', (event) => {
             const button = event.target.closest('.reply-button');
-            if (!button) return;
-            const postNumber = Number(button.dataset.postNumber || 0);
-            if (postNumber > 0) {
-              window.webkit?.messageHandlers?.replyPost?.postMessage(postNumber);
+            if (button) {
+              const postNumber = Number(button.dataset.postNumber || 0);
+              if (postNumber > 0) {
+                window.webkit?.messageHandlers?.replyPost?.postMessage(postNumber);
+              }
+              return;
+            }
+
+            const profileButton = event.target.closest('[data-profile-post-number]');
+            if (profileButton) {
+              const postNumber = Number(profileButton.dataset.profilePostNumber || 0);
+              if (postNumber > 0) {
+                window.webkit?.messageHandlers?.openUserProfile?.postMessage(postNumber);
+              }
             }
           });
+
+          (() => {
+            const articles = Array.from(document.querySelectorAll('.post[data-post-number]'));
+            let visibilityTimer = 0;
+
+            const visiblePostNumbers = () => {
+              const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+              return articles.reduce((numbers, article) => {
+                const rect = article.getBoundingClientRect();
+                const visiblePixels = Math.max(
+                  0,
+                  Math.min(rect.bottom, viewportHeight) - Math.max(rect.top, 0)
+                );
+                const requiredPixels = Math.min(120, Math.max(48, rect.height * 0.25));
+                const postNumber = Number(article.dataset.postNumber || 0);
+                if (postNumber > 0 && visiblePixels >= requiredPixels) {
+                  numbers.push(postNumber);
+                }
+                return numbers;
+              }, []);
+            };
+
+            const reportVisibility = () => {
+              visibilityTimer = 0;
+              window.webkit?.messageHandlers?.readingVisibility?.postMessage({
+                postNumbers: visiblePostNumbers()
+              });
+            };
+
+            const scheduleVisibilityReport = () => {
+              if (visibilityTimer) return;
+              visibilityTimer = window.setTimeout(() => {
+                window.requestAnimationFrame(reportVisibility);
+              }, 180);
+            };
+
+            window.LDOReading = {
+              setState(readPostNumbers, reportingPostNumbers) {
+                const read = new Set((readPostNumbers || []).map(Number));
+                const reporting = new Set((reportingPostNumbers || []).map(Number));
+                for (const article of articles) {
+                  const postNumber = Number(article.dataset.postNumber || 0);
+                  const isRead = read.has(postNumber);
+                  article.classList.toggle('is-read', isRead);
+                  article.classList.toggle(
+                    'is-reporting',
+                    reporting.has(postNumber) && !isRead
+                  );
+                  const indicator = article.querySelector('.read-indicator');
+                  if (indicator) {
+                    indicator.setAttribute('aria-hidden', isRead ? 'true' : 'false');
+                    if (isRead) {
+                      indicator.removeAttribute('title');
+                    } else {
+                      indicator.setAttribute('role', 'status');
+                      indicator.setAttribute('aria-label', '未读楼层');
+                      indicator.setAttribute('title', '停留后同步阅读状态');
+                    }
+                  }
+                }
+              },
+              reportVisibility
+            };
+
+            window.addEventListener('scroll', scheduleVisibilityReport, { passive: true });
+            window.addEventListener('resize', scheduleVisibilityReport, { passive: true });
+            document.addEventListener('visibilitychange', scheduleVisibilityReport);
+            window.requestAnimationFrame(reportVisibility);
+          })();
         </script>
         """
 
         return CookedHTMLView.wrapHTML(
             body,
             additionalHead: documentCSS,
-            additionalScript: replyScript
+            additionalScript: interactionScript
         )
     }
 
     private static func postHTML(
         _ post: PostItem,
         followedUsernames: Set<String>,
-        followedHighlightEnabled: Bool
+        followedHighlightEnabled: Bool,
+        readPostNumbers: Set<Int>,
+        reportingPostNumbers: Set<Int>
     ) -> String {
         let normalizedUsername = post.username
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -704,19 +935,25 @@ struct TopicDocumentWebView: NSViewRepresentable {
         } ?? ""
         let avatar = avatarHTML(post)
         let followedClass = isFollowed ? " followed" : ""
+        let isRead = readPostNumbers.contains(post.postNumber)
+        let readClass = isRead ? " is-read" : ""
+        let reportingClass = reportingPostNumbers.contains(post.postNumber) ? " is-reporting" : ""
+        let indicatorAccessibility = isRead
+            ? "aria-hidden=\"true\""
+            : "role=\"status\" aria-label=\"未读楼层\" title=\"停留后同步阅读状态\""
 
         return """
-        <article class="post\(followedClass)" id="post-\(post.postNumber)">
+        <article class="post\(followedClass)\(readClass)\(reportingClass)" id="post-\(post.postNumber)" data-post-number="\(post.postNumber)">
           \(avatar)
           <div class="post-main">
             <div class="post-heading">
               <div>
                 <div class="author-line">
-                  <span class="author-name">\(escapeHTML(displayName))</span>
+                  <button class="profile-button author-name" data-profile-post-number="\(post.postNumber)" aria-label="查看 \(escapeAttribute(displayName)) 的资料">\(escapeHTML(displayName))</button>
                   \(username)\(acceptedBadge)\(followedBadge)
                 </div>
                 <div class="post-metadata">
-                  <span>#\(post.postNumber)</span><span>\(createdAt)</span>\(replyMetadata)
+                  <span>#\(post.postNumber)</span><span>\(createdAt)</span><span class="read-indicator" \(indicatorAccessibility)></span>\(replyMetadata)
                 </div>
               </div>
             </div>
@@ -728,12 +965,13 @@ struct TopicDocumentWebView: NSViewRepresentable {
     }
 
     private static func avatarHTML(_ post: PostItem) -> String {
+        let label = escapeAttribute("查看 \(post.name?.isEmpty == false ? post.name! : post.username) 的资料")
         if let template = post.avatarTemplate,
            let url = Endpoints.avatarURL(template: template, size: 72) {
-            return "<img class=\"avatar\" src=\"\(escapeAttribute(url.absoluteString))\" alt=\"\">"
+            return "<button class=\"profile-button avatar-button\" data-profile-post-number=\"\(post.postNumber)\" aria-label=\"\(label)\"><img class=\"avatar\" src=\"\(escapeAttribute(url.absoluteString))\" alt=\"\"></button>"
         }
         let initial = escapeHTML(String((post.name ?? post.username).prefix(1)).uppercased())
-        return "<div class=\"avatar avatar-fallback\" aria-hidden=\"true\">\(initial)</div>"
+        return "<button class=\"profile-button avatar-button\" data-profile-post-number=\"\(post.postNumber)\" aria-label=\"\(label)\"><span class=\"avatar avatar-fallback\" aria-hidden=\"true\">\(initial)</span></button>"
     }
 
     private static func badgeHTML(_ text: String, className: String) -> String {
@@ -770,6 +1008,16 @@ struct TopicDocumentWebView: NSViewRepresentable {
         if let value = value as? NSNumber { return value.intValue }
         if let value = value as? String { return Int(value) }
         return nil
+    }
+
+    private static func postNumbers(from value: Any?) -> Set<Int>? {
+        guard let payload = value as? [String: Any],
+              let values = payload["postNumbers"] as? [Any] else { return nil }
+        return Set(values.compactMap(integer(from:)))
+    }
+
+    private static func javaScriptArray(_ values: [Int]) -> String {
+        "[\(values.map(String.init).joined(separator: ","))]"
     }
 }
 

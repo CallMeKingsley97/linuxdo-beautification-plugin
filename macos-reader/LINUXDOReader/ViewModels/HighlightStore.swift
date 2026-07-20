@@ -113,8 +113,11 @@ final class HighlightStore: ObservableObject {
         followedColorHex = hex
     }
 
-    func addKeywordRule() {
-        keywordRules.append(KeywordHighlightRule(colorHex: Self.defaultKeywordColor))
+    @discardableResult
+    func addKeywordRule() -> UUID {
+        let rule = KeywordHighlightRule(colorHex: Self.defaultKeywordColor)
+        keywordRules.append(rule)
+        return rule.id
     }
 
     func removeKeywordRule(id: UUID) {
@@ -183,6 +186,27 @@ final class HighlightStore: ObservableObject {
 
     func isFollowing(_ username: String) -> Bool {
         followedUsernames.contains(Self.normalizedUsername(username))
+    }
+
+    func setFollowing(_ username: String, isFollowing: Bool) {
+        guard let owner = followedUsersOwner else { return }
+        let normalized = Self.normalizedUsername(username)
+        guard !normalized.isEmpty, normalized != owner else { return }
+
+        if isFollowing {
+            followedUsernames.insert(normalized)
+        } else {
+            followedUsernames.remove(normalized)
+        }
+
+        var cache = loadFollowedCache()
+        let key = Self.accountKey(owner)
+        var record = cache.accounts[key] ?? FollowedUsersRecord()
+        record.users = followedUsernames.sorted()
+        record.lastSuccessAt = Date()
+        cache.accounts[key] = record
+        saveFollowedCache(cache)
+        lastFollowedUsersSyncAt = record.lastSuccessAt
     }
 
     private func matchingKeywordRule(for topic: TopicSummary) -> KeywordHighlightRule? {

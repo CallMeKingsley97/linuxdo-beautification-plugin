@@ -10,6 +10,8 @@ struct ContentView: View {
     var body: some View {
         Group {
             switch appState.selection {
+            case .notifications:
+                notificationsLayout
             case .site:
                 siteLayout
             case .settings:
@@ -34,6 +36,8 @@ struct ContentView: View {
         .onChange(of: appState.selection) { _, newSelection in
             appState.selectedTopicID = nil
             switch newSelection {
+            case .notifications:
+                appState.notificationViewModel.loadIfNeeded()
             case .site:
                 appState.siteSession.loadHomeIfNeeded()
             case .settings:
@@ -45,6 +49,7 @@ struct ContentView: View {
         }
         .onChange(of: appState.selectedTopicID) { _, newID in
             if let newID {
+                appState.dismissUserProfiles()
                 appState.detailViewModel.load(topicID: newID)
             }
         }
@@ -69,11 +74,21 @@ struct ContentView: View {
                 max: LDOTheme.listMaxWidth
             )
         } detail: {
-            TopicDetailView(
-                viewModel: appState.detailViewModel,
-                topicID: appState.selectedTopicID,
-                highlightStore: appState.highlightStore
-            )
+            if let route = appState.currentProfileRoute {
+                UserProfileView(
+                    viewModel: appState.profileViewModel,
+                    route: route
+                )
+            } else {
+                TopicDetailView(
+                    viewModel: appState.detailViewModel,
+                    topicID: appState.selectedTopicID,
+                    targetPostNumber: appState.targetTopicID == appState.selectedTopicID
+                        ? appState.targetPostNumber
+                        : nil,
+                    highlightStore: appState.highlightStore
+                )
+            }
         }
         .navigationSplitViewStyle(.balanced)
         .background(LDOTheme.windowBackground)
@@ -84,6 +99,19 @@ struct ContentView: View {
             sidebar
         } detail: {
             SiteBrowserView(store: appState.siteSession)
+        }
+        .navigationSplitViewStyle(.balanced)
+        .background(LDOTheme.windowBackground)
+    }
+
+    private var notificationsLayout: some View {
+        NavigationSplitView {
+            sidebar
+        } detail: {
+            NotificationCenterView(
+                viewModel: appState.notificationViewModel,
+                siteSession: appState.siteSession
+            )
         }
         .navigationSplitViewStyle(.balanced)
         .background(LDOTheme.windowBackground)
@@ -104,7 +132,15 @@ struct ContentView: View {
             selection: $appState.selection,
             categoryStore: appState.categoryStore,
             siteSession: appState.siteSession,
-            onOpenLogin: appState.openLogin
+            notificationViewModel: appState.notificationViewModel,
+            onOpenLogin: appState.openLogin,
+            onOpenProfile: { user in
+                appState.openUserProfile(
+                    username: user.username,
+                    displayName: user.displayName,
+                    avatarTemplate: user.avatarTemplate
+                )
+            }
         )
     }
 }

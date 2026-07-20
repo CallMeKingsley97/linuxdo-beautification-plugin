@@ -92,6 +92,7 @@ struct SettingsView: View {
 private struct HighlightSettingsSections: View {
     @ObservedObject var store: HighlightStore
     let isLoggedIn: Bool
+    @State private var editingKeywordRuleID: UUID?
 
     var body: some View {
         Section {
@@ -152,16 +153,21 @@ private struct HighlightSettingsSections: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(store.keywordRules) { rule in
-                    KeywordRuleSettingsRow(store: store, rule: rule)
+                    KeywordRuleSettingsRow(
+                        store: store,
+                        rule: rule,
+                        isEditorPresented: editorBinding(for: rule.id)
+                    )
                 }
             }
 
             Button {
-                store.addKeywordRule()
+                editingKeywordRuleID = store.addKeywordRule()
             } label: {
                 Label("添加关键词", systemImage: "plus")
             }
             .buttonStyle(.borderless)
+            .controlSize(.small)
         } header: {
             Text("帖子关键词高亮")
         } footer: {
@@ -178,6 +184,15 @@ private struct HighlightSettingsSections: View {
         Binding(
             get: { store.followedColor },
             set: { store.setFollowedColor($0) }
+        )
+    }
+
+    private func editorBinding(for ruleID: UUID) -> Binding<Bool> {
+        Binding(
+            get: { editingKeywordRuleID == ruleID },
+            set: { isPresented in
+                editingKeywordRuleID = isPresented ? ruleID : nil
+            }
         )
     }
 
@@ -198,40 +213,132 @@ private struct HighlightSettingsSections: View {
 private struct KeywordRuleSettingsRow: View {
     @ObservedObject var store: HighlightStore
     let rule: KeywordHighlightRule
+    @Binding var isEditorPresented: Bool
 
     var body: some View {
         HStack(spacing: 10) {
-            Toggle("启用规则", isOn: enabledBinding)
+            keywordColorChip
+
+            Text(displayKeyword)
+                .foregroundStyle(displayKeywordStyle)
+                .lineLimit(1)
+
+            if !rule.enabled {
+                Text("已停用")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 12)
+
+            Toggle("启用关键词 " + displayKeyword, isOn: enabledBinding)
                 .labelsHidden()
-                .toggleStyle(.checkbox)
+                .toggleStyle(.switch)
+                .controlSize(.mini)
                 .help(rule.enabled ? "停用此关键词" : "启用此关键词")
 
-            TextField("输入关键词", text: keywordBinding)
-                .textFieldStyle(.roundedBorder)
-                .labelsHidden()
-                .multilineTextAlignment(.leading)
-                .frame(minWidth: 180, maxWidth: .infinity)
-                .accessibilityLabel("关键词")
-
-            ColorPicker(
-                "关键词颜色",
-                selection: colorBinding,
-                supportsOpacity: false
-            )
-            .labelsHidden()
-            .controlSize(.small)
-            .help("选择强调色")
-
             Button {
-                store.removeKeywordRule(id: rule.id)
+                isEditorPresented = true
             } label: {
-                Image(systemName: "minus.circle")
+                Image(systemName: "ellipsis.circle")
                     .symbolRenderingMode(.hierarchical)
             }
             .buttonStyle(.borderless)
             .foregroundStyle(.secondary)
-            .help("删除关键词")
+            .help("编辑关键词")
+            .accessibilityLabel("编辑关键词 " + displayKeyword)
+            .popover(isPresented: $isEditorPresented, arrowEdge: .trailing) {
+                keywordEditor
+            }
         }
+        .padding(.vertical, 2)
+        .contextMenu {
+            Button("编辑关键词") {
+                isEditorPresented = true
+            }
+
+            Toggle("启用关键词", isOn: enabledBinding)
+
+            Divider()
+
+            Button("删除关键词", role: .destructive) {
+                removeRule()
+            }
+        }
+    }
+
+    private var keywordEditor: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 8) {
+                Image(systemName: "text.magnifyingglass")
+                    .foregroundStyle(colorBinding.wrappedValue)
+                Text("编辑关键词")
+                    .font(.headline)
+            }
+
+            LabeledContent("关键词") {
+                TextField("输入关键词", text: keywordBinding)
+                    .textFieldStyle(.roundedBorder)
+                    .labelsHidden()
+                    .frame(width: 190)
+                    .accessibilityLabel("关键词")
+            }
+
+            LabeledContent("强调色") {
+                ColorPicker(
+                    "关键词强调色",
+                    selection: colorBinding,
+                    supportsOpacity: false
+                )
+                .labelsHidden()
+                .controlSize(.small)
+            }
+
+            Divider()
+
+            HStack {
+                Button("删除关键词", role: .destructive) {
+                    removeRule()
+                }
+
+                Spacer()
+
+                Button("完成") {
+                    isEditorPresented = false
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(16)
+        .frame(width: 320)
+    }
+
+    private var keywordColorChip: some View {
+        RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .fill(colorBinding.wrappedValue)
+            .frame(width: 12, height: 12)
+            .overlay {
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .stroke(Color.primary.opacity(0.14), lineWidth: 0.5)
+            }
+            .opacity(rule.enabled ? 1 : 0.45)
+            .accessibilityHidden(true)
+    }
+
+    private var displayKeyword: String {
+        let keyword = rule.keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        return keyword.isEmpty ? "未命名关键词" : keyword
+    }
+
+    private var displayKeywordStyle: HierarchicalShapeStyle {
+        rule.enabled && !rule.keyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? .primary
+            : .secondary
+    }
+
+    private func removeRule() {
+        isEditorPresented = false
+        store.removeKeywordRule(id: rule.id)
     }
 
     private var enabledBinding: Binding<Bool> {

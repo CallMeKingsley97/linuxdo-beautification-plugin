@@ -8,7 +8,9 @@ struct SidebarView: View {
     @Binding var selection: BrowseSelection
     @ObservedObject var categoryStore: CategoryStore
     @ObservedObject var siteSession: SiteSessionStore
+    @ObservedObject var notificationViewModel: NotificationCenterViewModel
     let onOpenLogin: () -> Void
+    let onOpenProfile: (SiteUser) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,6 +28,23 @@ struct SidebarView: View {
 
                 Section("账号") {
                     accountRow
+
+                    HStack(spacing: 8) {
+                        Label("通知", systemImage: "bell")
+                        Spacer(minLength: 4)
+                        if notificationViewModel.unreadCount > 0 {
+                            Text(notificationViewModel.unreadCount.formatted())
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .monospacedDigit()
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.accentColor, in: Capsule())
+                                .accessibilityLabel("\(notificationViewModel.unreadCount) 条未读通知")
+                        }
+                    }
+                    .contentShape(Rectangle())
+                    .tag(BrowseSelection.notifications)
 
                     Button {
                         siteSession.refreshSession()
@@ -56,7 +75,7 @@ struct SidebarView: View {
         )
         .navigationTitle("LINUX DO")
         .toolbar {
-            if selection != .site, selection != .settings {
+            if selection != .site, selection != .settings, selection != .notifications {
                 ToolbarItem(placement: .automatic) {
                     Button {
                         categoryStore.refresh(force: true)
@@ -75,7 +94,9 @@ struct SidebarView: View {
     @ViewBuilder
     private var accountRow: some View {
         if let user = siteSession.currentUser {
-            Button(action: onOpenLogin) {
+            Button {
+                onOpenProfile(user)
+            } label: {
                 HStack(spacing: 9) {
                     AvatarView(template: user.avatarTemplate, size: 28)
                     VStack(alignment: .leading, spacing: 1) {
@@ -96,7 +117,7 @@ struct SidebarView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("打开站内账号页")
+            .help("打开原生用户资料")
         } else {
             Button(action: onOpenLogin) {
                 Label(

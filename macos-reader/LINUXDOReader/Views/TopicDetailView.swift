@@ -6,8 +6,10 @@ import SwiftUI
 
 struct TopicDetailView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var viewModel: TopicDetailViewModel
     let topicID: Int?
+    let targetPostNumber: Int?
     @ObservedObject var highlightStore: HighlightStore
     @State private var replyContext: ReplyContext?
 
@@ -37,6 +39,21 @@ struct TopicDetailView: View {
                 viewModel: viewModel,
                 context: context
             )
+        }
+        .onAppear { updateReadingSession() }
+        .onDisappear { viewModel.stopReading() }
+        .onChange(of: scenePhase) { _, _ in
+            updateReadingSession()
+        }
+        .onChange(of: topicID) { _, newTopicID in
+            if newTopicID == nil {
+                viewModel.stopReading()
+            } else {
+                updateReadingSession()
+            }
+        }
+        .onReceive(appState.siteSession.$currentUser) { _ in
+            updateReadingSession()
         }
     }
 
@@ -90,11 +107,26 @@ struct TopicDetailView: View {
                 followedUsernames: highlightStore.followedUsernames,
                 followedHighlightEnabled: highlightStore.followedHighlightEnabled,
                 followedColorHex: highlightStore.followedColorHex,
+                readPostNumbers: viewModel.readPostNumbers,
+                reportingPostNumbers: viewModel.reportingPostNumbers,
+                targetPostNumber: targetPostNumber,
                 onOpenTopic: { appState.selectTopic(id: $0) },
-                onReply: { beginReply(to: $0.postNumber) }
+                onOpenUser: { post in
+                    appState.openUserProfile(
+                        username: post.username,
+                        displayName: post.name,
+                        avatarTemplate: post.avatarTemplate
+                    )
+                },
+                onReply: { beginReply(to: $0.postNumber) },
+                onVisiblePostsChanged: viewModel.updateVisiblePostNumbers
             )
         }
         .background(LDOTheme.contentBackground)
+        .task(id: targetLoadID(detail: detail)) {
+            guard let targetPostNumber else { return }
+            await viewModel.loadTargetPostIfNeeded(postNumber: targetPostNumber)
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if viewModel.canLoadMore || viewModel.isLoadingMore {
                 pagingBar(detail)
@@ -166,6 +198,17 @@ struct TopicDetailView: View {
         }
         viewModel.clearReplyMessage()
         replyContext = ReplyContext(postNumber: postNumber)
+    }
+
+    private func updateReadingSession() {
+        viewModel.updateReadingSession(
+            isLoggedIn: appState.siteSession.isLoggedIn,
+            isFocused: scenePhase == .active
+        )
+    }
+
+    private func targetLoadID(detail: TopicDetail) -> String {
+        "\(detail.id):\(targetPostNumber ?? 0)"
     }
 
 }
