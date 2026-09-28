@@ -61,8 +61,12 @@ final class SiteSessionStore: NSObject, ObservableObject {
     let webView: WKWebView
     let requestWebView: WKWebView
 
+    private static let maximumRequestHostReloadAttempts = 5
+
     private var didStartRequestHost = false
     private var didRestorePersistedCookies = false
+    private var requestHostReloadAttempts = 0
+    private var lastRequestHostRecoveryAt = Date.distantPast
     private var sessionTask: Task<Void, Never>?
     private var loginPollTask: Task<Void, Never>?
 
@@ -106,6 +110,49 @@ final class SiteSessionStore: NSObject, ObservableObject {
             await self.restorePersistedCookiesIfNeeded()
             self.requestHostReady = false
             self.requestWebView.load(URLRequest(url: Endpoints.sessionCSRF()))
+        }
+    }
+
+    /// Cloudflare 挑战或错误页会劫持后台请求宿主页，重建宿主页后后续请求即可恢复。
+    func recoverRequestHost(reason: String, force: Bool = false) {
+        guard force || Date().timeIntervalSince(lastRequestHostRecoveryAt) > 10 else { return }
+        guard force || requestHostReloadAttempts < Self.maximumRequestHostReloadAttempts else { return }
+
+        lastRequestHostRecoveryAt = Date()
+        requestHostReloadAttempts += 1
+        requestHostReady = false
+
+        #if DEBUG
+        print("[LINUXDOReader][Request] recover host reason=\(reason) attempt=\(requestHostReloadAttempts)")
+        #endif
+
+        Task { [weak self] in
+            guard let self else { return }
+            await self.restorePersistedCookiesIfNeeded()
+            self.requestWebView.load(URLRequest(url: Endpoints.sessionCSRF()))
+        }
+    }
+
+    private func verifyRequestHost(_ webView: WKWebView) {
+        guard webView.url?.host == Endpoints.baseURL.host else {
+            requestHostReady = false
+            recoverRequestHost(reason: "off-host")
+            return
+        }
+
+        webView.evaluateJavaScript("document.body ? document.body.innerText : ''") { [weak self] value, _ in
+            Task { @MainActor in
+                guard let self else { return }
+                let text = (value as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if text.hasPrefix("{") {
+                    self.requestHostReloadAttempts = 0
+                    self.requestHostReady = true
+                    self.refreshSession(retryIfAnonymous: false)
+                } else {
+                    self.requestHostReady = false
+                    self.recoverRequestHost(reason: "challenge-page")
+                }
+            }
         }
     }
 
@@ -318,6 +365,7 @@ final class SiteSessionStore: NSObject, ObservableObject {
         let contentType = (envelope["contentType"] as? String ?? "").lowercased()
         let trimmedBody = responseBody.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if contentType.contains("text/html") || trimmedBody.hasPrefix("<!doctype html") || trimmedBody.hasPrefix("<html") {
+            recoverRequestHost(reason: "html-response:\(path)")
             throw SiteRequestError.challengeRequired
         }
 
@@ -477,14 +525,18 @@ extension SiteSessionStore: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if webView === requestWebView {
-            requestHostReady = webView.url?.host == Endpoints.baseURL.host
-            if requestHostReady { refreshSession(retryIfAnonymous: false) }
+            verifyRequestHost(webView)
             return
         }
 
         isLoading = false
         syncState(webView)
         if webView.url?.host == Endpoints.baseURL.host {
+            if !requestHostReady {
+                // 用户在“登录与验证”里通过了挑战：宿主页需要跟着重建。
+                requestHostReloadAttempts = 0
+                recoverRequestHost(reason: "site-verified", force: true)
+            }
             refreshSession(retryIfAnonymous: true)
             if webView.url?.path.hasPrefix("/login") == true {
                 startLoginPolling()

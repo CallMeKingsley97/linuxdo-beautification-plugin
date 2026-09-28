@@ -39,11 +39,11 @@ enum BrowseSelection: Hashable, Identifiable {
 
     var systemImage: String {
         switch self {
-        case .latest: return "clock"
-        case .hot: return "flame"
-        case .notifications: return "bell"
-        case .site: return "person.crop.circle.badge.checkmark"
-        case .settings: return "gearshape"
+        case .latest: return LDOIcon.latest
+        case .hot: return LDOIcon.popular
+        case .notifications: return LDOIcon.notifications
+        case .site: return LDOIcon.account
+        case .settings: return LDOIcon.settings
         case .category: return "folder"
         }
     }

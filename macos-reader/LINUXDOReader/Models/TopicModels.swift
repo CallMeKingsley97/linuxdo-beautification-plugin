@@ -268,6 +268,8 @@ struct TopicDetail: Identifiable, Hashable {
     var postStreamIDs: [Int]
     var chunkSize: Int?
     var deletedBy: String?
+    var ownerUserID: Int?
+    var ownerUsername: String?
     var lastReadPostNumber: Int?
     var highestPostNumber: Int?
 
@@ -308,6 +310,8 @@ struct TopicDetail: Identifiable, Hashable {
             postStreamIDs: dto.postStream?.stream ?? posts.map(\.id),
             chunkSize: dto.chunkSize,
             deletedBy: dto.details?.deletedBy?.username,
+            ownerUserID: dto.userId ?? dto.details?.createdBy?.id,
+            ownerUsername: dto.details?.createdBy?.username,
             lastReadPostNumber: dto.lastReadPostNumber,
             highestPostNumber: dto.highestPostNumber
         )
@@ -340,6 +344,8 @@ struct TopicDetail: Identifiable, Hashable {
             postStreamIDs: posts.map(\.id),
             chunkSize: posts.count,
             deletedBy: nil,
+            ownerUserID: nil,
+            ownerUsername: posts.first { $0.postNumber == 1 }?.username,
             lastReadPostNumber: nil,
             highestPostNumber: posts.map(\.postNumber).max()
         )
@@ -377,6 +383,8 @@ struct TopicDetail: Identifiable, Hashable {
             postStreamIDs: postStreamIDs,
             chunkSize: chunkSize,
             deletedBy: deletedBy,
+            ownerUserID: ownerUserID,
+            ownerUsername: ownerUsername,
             lastReadPostNumber: lastReadPostNumber,
             highestPostNumber: max(highestPostNumber ?? 0, loadedHighestPostNumber)
         )

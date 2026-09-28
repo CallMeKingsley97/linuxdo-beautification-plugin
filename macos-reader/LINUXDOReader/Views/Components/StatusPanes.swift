@@ -25,7 +25,7 @@ struct ErrorPane: View {
 
     var body: some View {
         ContentUnavailableView {
-            Label("加载失败", systemImage: "wifi.exclamationmark")
+            Label("加载失败", systemImage: LDOIcon.error)
         } description: {
             Text(message)
         } actions: {

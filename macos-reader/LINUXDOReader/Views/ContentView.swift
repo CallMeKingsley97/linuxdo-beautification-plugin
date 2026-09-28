@@ -144,8 +144,12 @@ struct ContentView: View {
         )
     }
 }
-#Preview {
-    ContentView()
-        .environmentObject(AppState())
-        .frame(width: 1100, height: 720)
+#if DEBUG
+struct ContentView_Previews: PreviewProvider {
+    static var previews: some View {
+        ContentView()
+            .environmentObject(AppState())
+            .frame(width: 1100, height: 720)
+    }
 }
+#endif

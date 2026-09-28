@@ -189,6 +189,8 @@ struct CookedHTMLView: NSViewRepresentable {
             --code-bg: rgba(127,127,127,0.12);
             --quote-border: rgba(127,127,127,0.35);
             --subtle-bg: rgba(127,127,127,0.08);
+            --surface: rgba(255,255,255,0.62);
+            --surface-border: rgba(0,0,0,0.12);
           }
           @media (prefers-color-scheme: dark) {
             :root {
@@ -198,6 +200,8 @@ struct CookedHTMLView: NSViewRepresentable {
               --code-bg: rgba(255,255,255,0.08);
               --quote-border: rgba(255,255,255,0.25);
               --subtle-bg: rgba(255,255,255,0.055);
+              --surface: rgba(255,255,255,0.045);
+              --surface-border: rgba(255,255,255,0.085);
             }
           }
           html, body {
@@ -248,7 +252,7 @@ struct CookedHTMLView: NSViewRepresentable {
           th, td { border-bottom: 1px solid var(--quote-border); padding: 0.45em 0.6em; text-align: left; }
           aside.quote, .onebox {
             background: var(--subtle-bg);
-            border-radius: 9px;
+            border-radius: 8px;
             padding: 10px 12px;
             margin: 0.8em 0;
           }
@@ -839,6 +843,8 @@ struct TopicDocumentWebView: NSViewRepresentable {
         let posts = detail.posts.map { post in
             postHTML(
                 post,
+                ownerUserID: detail.ownerUserID,
+                ownerUsername: detail.ownerUsername,
                 followedUsernames: followedUsernames,
                 followedHighlightEnabled: followedHighlightEnabled,
                 readPostNumbers: readPostNumbers,
@@ -869,12 +875,17 @@ struct TopicDocumentWebView: NSViewRepresentable {
 
         let documentCSS = """
         <style>
-          \(actionSymbolCSS)
+          .discourse-icon {
+            display: block;
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
+          }
           html, body { min-height: 100%; }
           body { overflow-y: auto; }
           .topic-document {
             width: 100%;
-            max-width: 860px;
+            max-width: \(Int(LDOTheme.readerMaxWidth))px;
             margin: 0 auto;
           }
           .topic-header {
@@ -912,6 +923,10 @@ struct TopicDocumentWebView: NSViewRepresentable {
           .status-success {
             color: color-mix(in srgb, var(--follow-color) 82%, var(--text));
             background: color-mix(in srgb, var(--follow-color) 13%, transparent);
+          }
+          .status-owner {
+            color: color-mix(in srgb, var(--link) 82%, var(--text));
+            background: color-mix(in srgb, var(--link) 14%, transparent);
           }
           .post-stream { border-top: 1px solid var(--quote-border); }
           .post {
@@ -1036,7 +1051,7 @@ struct TopicDocumentWebView: NSViewRepresentable {
           .shared-issue-button.active { color: var(--link); border-color: color-mix(in srgb, var(--link) 38%, transparent); }
           .post-actions-footer {
             display: flex;
-            min-height: 32px;
+            min-height: 26px;
             align-items: center;
             justify-content: space-between;
             gap: 10px;
@@ -1056,51 +1071,81 @@ struct TopicDocumentWebView: NSViewRepresentable {
           .post-action-buttons {
             display: inline-flex;
             align-items: center;
-            gap: 2px;
+            gap: 8px;
             margin-left: auto;
+            padding: 0;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            box-shadow: none;
           }
           .post-action-button {
+            appearance: none;
             position: relative;
             display: inline-flex;
-            width: 30px;
-            height: 28px;
+            width: 32px;
+            height: 30px;
+            box-sizing: border-box;
             align-items: center;
             justify-content: center;
             border: 0;
-            border-radius: 6px;
+            border-radius: 8px;
             padding: 0;
-            color: var(--muted);
+            color: color-mix(in srgb, var(--muted) 78%, var(--text));
             background: transparent;
             cursor: pointer;
-            transition: color 100ms ease, background-color 100ms ease, transform 80ms ease;
+            transition: color 150ms ease, background-color 150ms ease, opacity 150ms ease;
           }
           .post-action-button[hidden] { display: none !important; }
-          .post-action-button:hover {
+          .post-action-button:hover:not(:disabled) {
             color: var(--text);
-            background: color-mix(in srgb, var(--text) 7%, transparent);
+            background: color-mix(in srgb, var(--text) 0.065, transparent);
           }
-          .post-action-button:active:not(:disabled) { transform: scale(0.94); }
+          .post-action-button:active:not(:disabled) {
+            background: color-mix(in srgb, var(--text) 0.105, transparent);
+          }
           .post-action-button:focus-visible,
           .shared-issue-button:focus-visible {
             outline: 2px solid var(--link);
-            outline-offset: 1px;
+            outline-offset: 2px;
           }
           .post-action-button:disabled,
           .shared-issue-button:disabled { opacity: 0.42; cursor: default; }
-          .like-button.active { color: #d70015; }
-          .like-button .sf-heart-fill { display: none; }
-          .like-button.active .sf-heart { display: none; }
-          .like-button.active .sf-heart-fill { display: block; }
+          .like-button.active {
+            color: #d70015;
+            background: transparent;
+          }
+          .like-button.active:hover:not(:disabled) {
+            background: rgba(215, 0, 21, 0.065);
+          }
+          .like-button .discourse-icon + .discourse-icon { display: none; }
+          .like-button.active .discourse-icon + .discourse-icon { display: block; }
+          .like-button.active .discourse-icon:first-of-type { display: none; }
           @media (prefers-color-scheme: dark) {
-            .like-button.active { color: #ff453a; }
+            .like-button.active {
+              color: #ff453a;
+              background: transparent;
+            }
+            .like-button.active:hover:not(:disabled) {
+              background: rgba(255, 69, 58, 0.105);
+            }
+          }
+          @media (prefers-reduced-motion: reduce) {
+            .post-action-button,
+            .shared-issue-button {
+              transition: none;
+            }
           }
           .post-action-button.loading::after,
           .shared-issue-button.loading::after {
             content: '';
             position: absolute;
-            width: 12px;
-            height: 12px;
-            border: 1.5px solid currentColor;
+            width: 10px;
+            height: 10px;
+            margin: -5px 0 0 -5px;
+            left: 50%;
+            top: 50%;
+            border: 1.25px solid currentColor;
             border-right-color: transparent;
             border-radius: 50%;
             animation: action-spin 0.8s linear infinite;
@@ -1116,6 +1161,14 @@ struct TopicDocumentWebView: NSViewRepresentable {
             margin-top: 6px;
           }
           .boost-row:empty { display: none; }
+          .boost-row-button {
+            margin-left: 4px;
+            border: 0;
+            background: transparent;
+          }
+          .boost-row-button:hover:not(:disabled) {
+            border-color: transparent;
+          }
           .boost-pill {
             display: inline-flex;
             max-width: 72%;
@@ -1264,7 +1317,7 @@ struct TopicDocumentWebView: NSViewRepresentable {
                 return `<span class="boost-pill" title="${escapeHTML(boost.displayName)}">${avatar}<span class="boost-content">${boost.cookedHTML || ''}</span></span>`;
               }).join('');
               const rocket = boosts.length > 0 && state.canBoost
-                ? `<button class="post-action-button" data-post-action="boost" aria-label="Boost 此楼层" title="Boost 此楼层"><span class="sf-symbol sf-boost" aria-hidden="true"></span></button>`
+                ? `<button class="post-action-button boost-row-button" data-post-action="boost" aria-label="Boost 此楼层" title="Boost 此楼层"><svg class="discourse-icon" viewBox="0 0 512 512" aria-hidden="true"><path d="M498.1 5.6c10.1 7 15.4 19.1 13.5 31.2l-64 416c-1.5 9.7-7.4 18.2-16 23s-18.9 5.4-28 1.6L284 427.7l-68.5 74.1c-8.9 9.7-22.9 12.9-35.2 8.1S160 493.2 160 480l0-83.6c0-4 1.5-7.8 4.2-10.8L331.8 202.8c5.8-6.3 5.6-16-.4-22s-15.7-6.4-22-.7L106 360.8 17.7 316.6C7.1 311.3 .3 300.7 0 288.9s5.9-22.8 16.1-28.7l448-256c10.7-6.1 23.9-5.5 34 1.4z"/></svg></button>`
                 : '';
               row.innerHTML = pills + rocket;
             };
@@ -1367,13 +1420,14 @@ struct TopicDocumentWebView: NSViewRepresentable {
                   );
                   const indicator = article.querySelector('.read-indicator');
                   if (indicator) {
+                    const isReporting = reporting.has(postNumber) && !isRead;
                     indicator.setAttribute('aria-hidden', isRead ? 'true' : 'false');
                     if (isRead) {
                       indicator.removeAttribute('title');
                     } else {
                       indicator.setAttribute('role', 'status');
-                      indicator.setAttribute('aria-label', '未读楼层');
-                      indicator.setAttribute('title', '停留后同步阅读状态');
+                      indicator.setAttribute('aria-label', isReporting ? '阅读状态同步中' : '未读楼层');
+                      indicator.setAttribute('title', isReporting ? '正在同步阅读状态…' : '停留后同步阅读状态');
                     }
                   }
                 }
@@ -1398,6 +1452,8 @@ struct TopicDocumentWebView: NSViewRepresentable {
 
     private static func postHTML(
         _ post: PostItem,
+        ownerUserID: Int?,
+        ownerUsername: String?,
         followedUsernames: Set<String>,
         followedHighlightEnabled: Bool,
         readPostNumbers: Set<Int>,
@@ -1414,6 +1470,13 @@ struct TopicDocumentWebView: NSViewRepresentable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "@"))
             .lowercased()
+        let normalizedOwnerUsername = ownerUsername?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "@"))
+            .lowercased()
+        let isOwner = post.postNumber == 1
+            || (ownerUserID != nil && post.userID == ownerUserID)
+            || (normalizedOwnerUsername != nil && normalizedUsername == normalizedOwnerUsername)
         let isFollowed = followedHighlightEnabled
             && followedUsernames.contains(normalizedUsername)
         let displayName = post.name?.isEmpty == false ? post.name! : post.username
@@ -1422,6 +1485,9 @@ struct TopicDocumentWebView: NSViewRepresentable {
             : ""
         let acceptedBadge = post.acceptedAnswer
             ? badgeHTML("已采纳", className: "status-success")
+            : ""
+        let ownerBadge = isOwner
+            ? badgeHTML("楼主", className: "status-owner", title: "主题作者")
             : ""
         let followedBadge = isFollowed
             ? badgeHTML("已关注", className: "status-success")
@@ -1437,9 +1503,12 @@ struct TopicDocumentWebView: NSViewRepresentable {
         let isRead = readPostNumbers.contains(post.postNumber)
         let readClass = isRead ? " is-read" : ""
         let reportingClass = reportingPostNumbers.contains(post.postNumber) ? " is-reporting" : ""
+        let isReporting = !isRead && reportingPostNumbers.contains(post.postNumber)
         let indicatorAccessibility = isRead
             ? "aria-hidden=\"true\""
-            : "role=\"status\" aria-label=\"未读楼层\" title=\"停留后同步阅读状态\""
+            : isReporting
+                ? "role=\"status\" aria-label=\"阅读状态同步中\" title=\"正在同步阅读状态…\""
+                : "role=\"status\" aria-label=\"未读楼层\" title=\"停留后同步阅读状态\""
         let actionFooter = postActionsHTML(
             post,
             runningActions: runningActions,
@@ -1463,7 +1532,7 @@ struct TopicDocumentWebView: NSViewRepresentable {
               <div>
                 <div class="author-line">
                   <button class="profile-button author-name" data-profile-post-number="\(post.postNumber)" aria-label="查看 \(escapeAttribute(displayName)) 的资料">\(escapeHTML(displayName))</button>
-                  \(username)\(acceptedBadge)\(followedBadge)
+                  \(username)\(ownerBadge)\(acceptedBadge)\(followedBadge)
                 </div>
                 <div class="post-metadata">
                   <span>#\(post.postNumber)</span><span>\(createdAt)</span><span class="read-indicator" \(indicatorAccessibility)></span>\(replyMetadata)
@@ -1506,20 +1575,20 @@ struct TopicDocumentWebView: NSViewRepresentable {
             boostLoading ? "loading" : nil,
         ].compactMap { $0 }.joined(separator: " ")
         let boostButton = """
-        <button class="\(boostClasses)" data-post-action="boost" aria-label="Boost 此楼层" title="Boost 此楼层" \(post.canBoost && post.boosts.isEmpty ? "" : "hidden") \(boostLoading ? "disabled" : "")><span class="sf-symbol sf-boost" aria-hidden="true"></span></button>
+        <button class="\(boostClasses)" data-post-action="boost" aria-label="Boost 此楼层" title="Boost 此楼层" \(post.canBoost && post.boosts.isEmpty ? "" : "hidden") \(boostLoading ? "disabled" : "")>\(discourseIcon(named: "boost"))</button>
         """
         let replyButton = canReply
-            ? "<button class=\"post-action-button\" data-post-action=\"reply\" aria-label=\"回复 #\(post.postNumber)\" title=\"回复 #\(post.postNumber)\"><span class=\"sf-symbol sf-reply\" aria-hidden=\"true\"></span></button>"
+            ? "<button class=\"post-action-button\" data-post-action=\"reply\" aria-label=\"回复 #\(post.postNumber)\" title=\"回复 #\(post.postNumber)\">\(discourseIcon(named: "reply"))</button>"
             : ""
 
         return """
         <div class="post-actions-footer">
           <div class="reaction-summary">\(reactionSummary)\(reactionCount)</div>
           <div class="post-action-buttons">
-            <button class="\(likeClasses)" data-post-action="like" aria-label="点赞；按住或右键选择其他回应" title="点赞；按住或右键选择其他回应" \(likeLoading || !canLike ? "disabled" : "")><span class="sf-symbol sf-heart" aria-hidden="true"></span><span class="sf-symbol sf-heart-fill" aria-hidden="true"></span></button>
-            <button class="post-action-button" data-post-action="copyLink" aria-label="复制楼层链接" title="复制楼层链接"><span class="sf-symbol sf-link" aria-hidden="true"></span></button>
+            <button class="\(likeClasses)" data-post-action="like" aria-label="点赞；按住或右键选择其他回应" title="点赞；按住或右键选择其他回应" \(likeLoading || !canLike ? "disabled" : "")>\(discourseIcon(named: "heart"))\(discourseIcon(named: "heart", filled: true))</button>
+            <button class="post-action-button" data-post-action="copyLink" aria-label="复制楼层链接" title="复制楼层链接">\(discourseIcon(named: "copyLink"))</button>
             \(boostButton)
-            <button class="post-action-button" data-post-action="more" aria-label="更多操作" title="更多操作"><span class="sf-symbol sf-more" aria-hidden="true"></span></button>
+            <button class="post-action-button" data-post-action="more" aria-label="更多操作" title="更多操作">\(discourseIcon(named: "more"))</button>
             \(replyButton)
           </div>
         </div>
@@ -1539,7 +1608,7 @@ struct TopicDocumentWebView: NSViewRepresentable {
             loading ? "loading" : nil,
         ].compactMap { $0 }.joined(separator: " ")
         let label = created ? "俺也一样 (\(count))" : "俺也一样"
-        return "<button class=\"\(classes)\" data-post-action=\"sharedIssue\" \(!enabled || loading ? "disabled" : "")><span class=\"sf-symbol sf-hand\" aria-hidden=\"true\"></span><span class=\"shared-issue-label\">\(label)</span></button>"
+        return "<button class=\"\(classes)\" data-post-action=\"sharedIssue\" \(!enabled || loading ? "disabled" : "")>\(discourseIcon(named: "agree"))<span class=\"shared-issue-label\">\(label)</span></button>"
     }
 
     private static func boostRowHTML(_ post: PostItem) -> String {
@@ -1556,149 +1625,52 @@ struct TopicDocumentWebView: NSViewRepresentable {
             return "<span class=\"boost-pill\" title=\"\(escapeAttribute(displayName))\">\(avatar)<span class=\"boost-content\">\(boost.cookedHTML)</span></span>"
         }.joined()
         let rocket = post.canBoost
-            ? "<button class=\"post-action-button\" data-post-action=\"boost\" aria-label=\"Boost 此楼层\" title=\"Boost 此楼层\"><span class=\"sf-symbol sf-boost\" aria-hidden=\"true\"></span></button>"
+            ? "<button class=\"post-action-button boost-row-button\" data-post-action=\"boost\" aria-label=\"Boost 此楼层\" title=\"Boost 此楼层\">\(discourseIcon(named: "boost"))</button>"
             : ""
         return pills + rocket
     }
 
-    private static let actionSymbols: [(cssClass: String, symbolName: String)] = [
-        ("sf-heart", "heart"),
-        ("sf-heart-fill", "heart.fill"),
-        ("sf-link", "link"),
-        ("sf-boost", "paperplane.fill"),
-        ("sf-more", "ellipsis"),
-        ("sf-reply", "arrowshape.turn.up.left"),
-        ("sf-hand", "hand.raised"),
+    private struct DiscourseIcon {
+        let viewBox: String
+        let path: String
+    }
+
+    private static let discourseIcons: [String: DiscourseIcon] = [
+        "heart": DiscourseIcon(
+            viewBox: "0 0 512 512",
+            path: "M225.8 468.2l-2.5-2.3L48.1 303.2C17.4 274.7 0 234.7 0 192.8l0-3.3c0-70.4 50-130.8 119.2-144C158.6 37.9 198.9 47 231 69.6c9 6.4 17.4 13.8 25 22.3c4.2-4.8 8.7-9.2 13.5-13.3c3.7-3.2 7.5-6.2 11.5-9c0 0 0 0 0 0C313.1 47 353.4 37.9 392.8 45.4C462 58.6 512 119.1 512 189.5l0 3.3c0 41.9-17.4 81.9-48.1 110.4L288.7 465.9l-2.5 2.3c-8.2 7.6-19 11.9-30.2 11.9s-22-4.2-30.2-11.9zM239.1 145c-.4-.3-.7-.7-1-1.1l-17.8-20-.1-.1s0 0 0 0c-23.1-25.9-58-37.7-92-31.2C81.6 101.5 48 142.1 48 189.5l0 3.3c0 28.5 11.9 55.8 32.8 75.2L256 430.7 431.2 268c20.9-19.4 32.8-46.7 32.8-75.2l0-3.3c0-47.3-33.6-88-80.1-96.9c-34-6.5-69 5.4-92 31.2c0 0 0 0-.1 .1s0 0-.1 .1l-17.8 20c-.3 .4-.7 .7-1 1.1c-4.5 4.5-10.6 7-16.9 7s-12.4-2.5-16.9-7z"
+        ),
+        "heartFill": DiscourseIcon(
+            viewBox: "0 0 512 512",
+            path: "M47.6 300.4L228.3 469.1c7.5 7 17.4 10.9 27.7 10.9s20.2-3.9 27.7-10.9L464.4 300.4c30.4-28.3 47.6-68 47.6-109.5v-5.8c0-69.9-50.5-129.5-119.4-141C347 36.5 300.6 51.4 268 84L256 96 244 84c-32.6-32.6-79-47.5-124.6-39.9C50.5 55.6 0 115.2 0 185.1v5.8c0 41.5 17.2 81.2 47.6 109.5z"
+        ),
+        "copyLink": DiscourseIcon(
+            viewBox: "0 0 640 512",
+            path: "M579.8 267.7c56.5-56.5 56.5-148 0-204.5c-50-50-128.8-56.5-186.3-15.4l-1.6 1.1c-14.4 10.3-17.7 30.3-7.4 44.6s30.3 17.7 44.6 7.4l1.6-1.1c32.1-22.9 76-19.3 103.8 8.6c31.5 31.5 31.5 82.5 0 114L422.3 334.8c-31.5 31.5-82.5 31.5-114 0c-27.9-27.9-31.5-71.8-8.6-103.8l1.1-1.6c10.3-14.4 6.9-34.4-7.4-44.6s-34.4-6.9-44.6 7.4l-1.1 1.6C206.5 251.2 213 330 263 380c56.5 56.5 148 56.5 204.5 0L579.8 267.7zM60.2 244.3c-56.5 56.5-56.5 148 0 204.5c50 50 128.8 56.5 186.3 15.4l1.6-1.1c14.4-10.3 17.7-30.3 7.4-44.6s-30.3-17.7-44.6-7.4l-1.6 1.1c-32.1 22.9-76 19.3-103.8-8.6C74 372 74 321 105.5 289.5L217.7 177.2c31.5-31.5 82.5-31.5 114 0c27.9 27.9 31.5 71.8 8.6 103.9l-1.1 1.6c-10.3 14.4-6.9 34.4 7.4 44.6s34.4 6.9 44.6-7.4l1.1-1.6C433.5 260.8 427 182 377 132c-56.5-56.5-148-56.5-204.5 0L60.2 244.3z"
+        ),
+        "boost": DiscourseIcon(
+            viewBox: "0 0 512 512",
+            path: "M498.1 5.6c10.1 7 15.4 19.1 13.5 31.2l-64 416c-1.5 9.7-7.4 18.2-16 23s-18.9 5.4-28 1.6L284 427.7l-68.5 74.1c-8.9 9.7-22.9 12.9-35.2 8.1S160 493.2 160 480l0-83.6c0-4 1.5-7.8 4.2-10.8L331.8 202.8c5.8-6.3 5.6-16-.4-22s-15.7-6.4-22-.7L106 360.8 17.7 316.6C7.1 311.3 .3 300.7 0 288.9s5.9-22.8 16.1-28.7l448-256c10.7-6.1 23.9-5.5 34 1.4z"
+        ),
+        "more": DiscourseIcon(
+            viewBox: "0 0 448 512",
+            path: "M8 256a56 56 0 1 1 112 0A56 56 0 1 1 8 256zm160 0a56 56 0 1 1 112 0 56 56 0 1 1 -112 0zm216-56a56 56 0 1 1 0 112 56 56 0 1 1 0-112z"
+        ),
+        "reply": DiscourseIcon(
+            viewBox: "0 0 512 512",
+            path: "M205 34.8c11.5 5.1 19 16.6 19 29.2l0 64 112 0c97.2 0 176 78.8 176 176c0 113.3-81.5 163.9-100.2 174.1c-2.5 1.4-5.3 1.9-8.1 1.9c-10.9 0-19.7-8.9-19.7-19.7c0-7.5 4.3-14.4 9.8-19.5c9.4-8.8 22.2-26.4 22.2-56.7c0-53-43-96-96-96l-96 0 0 64c0 12.6-7.4 24.1-19 29.2s-25 3-34.4-5.4l-160-144C3.9 225.7 0 217.1 0 208s3.9-17.7 10.6-23.8l160-144c9.4-8.5 22.9-10.6 34.4-5.4z"
+        ),
+        "agree": DiscourseIcon(
+            viewBox: "0 0 384 512",
+            path: "M64 64l0 177.6c5.2-1 10.5-1.6 16-1.6l16 0 0-32L96 64c0-8.8-7.2-16-16-16s-16 7.2-16 16zM80 288c-17.7 0-32 14.3-32 32c0 0 0 0 0 0l0 24c0 66.3 53.7 120 120 120l48 0c52.5 0 97.1-33.7 113.4-80.7c-3.1 .5-6.2 .7-9.4 .7c-20 0-37.9-9.2-49.7-23.6c-9 4.9-19.4 7.6-30.3 7.6c-15.1 0-29-5.3-40-14c-11 8.8-24.9 14-40 14l-40 0c-13.3 0-24-10.7-24-24s10.7-24 24-24l40 0c8.8 0 16-7.2 16-16s-7.2-16-16-16l-40 0-40 0zM0 320s0 0 0 0c0-18 6-34.6 16-48L16 64C16 28.7 44.7 0 80 0s64 28.7 64 64l0 82c5.1-1.3 10.5-2 16-2c25.3 0 47.2 14.7 57.6 36c7-2.6 14.5-4 22.4-4c20 0 37.9 9.2 49.7 23.6c9-4.9 19.4-7.6 30.3-7.6c35.3 0 64 28.7 64 64l0 64 0 24c0 92.8-75.2 168-168 168l-48 0C75.2 512 0 436.8 0 344l0-24zm336-64c0-8.8-7.2-16-16-16s-16 7.2-16 16l0 48 0 16c0 8.8 7.2 16 16 16s16-7.2 16-16l0-64zM160 240c5.5 0 10.9 .7 16 2l0-2 0-32c0-8.8-7.2-16-16-16s-16 7.2-16 16l0 32 16 0zm64 24l0 40c0 8.8 7.2 16 16 16s16-7.2 16-16l0-48 0-16c0-8.8-7.2-16-16-16s-16 7.2-16 16l0 24z"
+        ),
     ]
 
-    private static let actionSymbolCSS: String = {
-        let sharedRules = """
-        .sf-symbol {
-          display: block;
-          width: 16px;
-          height: 16px;
-          flex: 0 0 16px;
-          background-color: currentColor;
-          -webkit-mask-repeat: no-repeat;
-          -webkit-mask-position: center;
-          -webkit-mask-size: contain;
-          mask-repeat: no-repeat;
-          mask-position: center;
-          mask-size: contain;
-        }
-        .shared-issue-button .sf-symbol {
-          width: 14px;
-          height: 14px;
-          flex-basis: 14px;
-        }
+    private static func discourseIcon(named name: String, filled: Bool = false) -> String {
+        guard let icon = discourseIcons[filled ? "\(name)Fill" : name] else { return "" }
+        return """
+        <svg class="discourse-icon" viewBox="\(icon.viewBox)" aria-hidden="true"><path d="\(icon.path)"/></svg>
         """
-        let symbolRules = actionSymbols.compactMap { symbol -> String? in
-            guard let dataURL = systemSymbolMaskDataURL(named: symbol.symbolName) else {
-                return nil
-            }
-            return """
-            .\(symbol.cssClass) {
-              -webkit-mask-image: url("\(dataURL)");
-              mask-image: url("\(dataURL)");
-            }
-            """
-        }
-        return ([sharedRules] + symbolRules).joined(separator: "\n")
-    }()
-
-    private static func systemSymbolMaskDataURL(named name: String) -> String? {
-        guard let baseImage = NSImage(systemSymbolName: name, accessibilityDescription: nil) else {
-            return nil
-        }
-        let configuration = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
-        let image = baseImage.withSymbolConfiguration(configuration) ?? baseImage
-        let canvasSize = NSSize(width: 20, height: 20)
-        guard let bitmap = NSBitmapImageRep(
-            bitmapDataPlanes: nil,
-            pixelsWide: 40,
-            pixelsHigh: 40,
-            bitsPerSample: 8,
-            samplesPerPixel: 4,
-            hasAlpha: true,
-            isPlanar: false,
-            colorSpaceName: .deviceRGB,
-            bytesPerRow: 0,
-            bitsPerPixel: 0
-        ), let graphicsContext = NSGraphicsContext(bitmapImageRep: bitmap) else {
-            return nil
-        }
-        bitmap.size = canvasSize
-
-        let sourceSize = image.size
-        let scale = min(
-            16 / max(sourceSize.width, 1),
-            16 / max(sourceSize.height, 1)
-        )
-        let drawSize = NSSize(
-            width: sourceSize.width * scale,
-            height: sourceSize.height * scale
-        )
-        let drawRect = NSRect(
-            x: (canvasSize.width - drawSize.width) / 2,
-            y: (canvasSize.height - drawSize.height) / 2,
-            width: drawSize.width,
-            height: drawSize.height
-        )
-
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = graphicsContext
-        NSColor.clear.setFill()
-        NSRect(origin: .zero, size: canvasSize).fill()
-        image.draw(
-            in: drawRect,
-            from: .zero,
-            operation: .sourceOver,
-            fraction: 1
-        )
-        graphicsContext.flushGraphics()
-        NSGraphicsContext.restoreGraphicsState()
-
-        var minimumX = bitmap.pixelsWide
-        var minimumY = bitmap.pixelsHigh
-        var maximumX = -1
-        var maximumY = -1
-        for y in 0..<bitmap.pixelsHigh {
-            for x in 0..<bitmap.pixelsWide {
-                guard (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.01 else {
-                    continue
-                }
-                minimumX = min(minimumX, x)
-                minimumY = min(minimumY, y)
-                maximumX = max(maximumX, x)
-                maximumY = max(maximumY, y)
-            }
-        }
-        guard maximumX >= minimumX, maximumY >= minimumY else { return nil }
-
-        let padding = 1
-        let cropX = max(0, minimumX - padding)
-        let cropY = max(0, minimumY - padding)
-        let cropWidth = min(
-            bitmap.pixelsWide - cropX,
-            maximumX - minimumX + 1 + padding * 2
-        )
-        let cropHeight = min(
-            bitmap.pixelsHigh - cropY,
-            maximumY - minimumY + 1 + padding * 2
-        )
-        guard let croppedImage = bitmap.cgImage?.cropping(
-            to: CGRect(
-                x: cropX,
-                y: cropY,
-                width: cropWidth,
-                height: cropHeight
-            )
-        ) else { return nil }
-        let croppedBitmap = NSBitmapImageRep(cgImage: croppedImage)
-        guard let data = croppedBitmap.representation(using: .png, properties: [:]) else {
-            return nil
-        }
-        return "data:image/png;base64,\(data.base64EncodedString())"
     }
 
     private static func reactionEmoji(_ id: String) -> String {
@@ -1727,8 +1699,9 @@ struct TopicDocumentWebView: NSViewRepresentable {
         return "<button class=\"profile-button avatar-button\" data-profile-post-number=\"\(post.postNumber)\" aria-label=\"\(label)\"><span class=\"avatar avatar-fallback\" aria-hidden=\"true\">\(initial)</span></button>"
     }
 
-    private static func badgeHTML(_ text: String, className: String) -> String {
-        "<span class=\"status-badge \(className)\">\(escapeHTML(text))</span>"
+    private static func badgeHTML(_ text: String, className: String, title: String? = nil) -> String {
+        let titleAttribute = title.map { " title=\"\(escapeAttribute($0))\"" } ?? ""
+        return "<span class=\"status-badge \(className)\"\(titleAttribute)>\(escapeHTML(text))</span>"
     }
 
     private static func safeColor(_ value: String) -> String {

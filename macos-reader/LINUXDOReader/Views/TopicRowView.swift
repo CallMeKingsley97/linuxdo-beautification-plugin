@@ -15,13 +15,13 @@ struct TopicRowView: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     if topic.pinned {
-                        Image(systemName: "pin.fill")
-                            .font(.caption2)
+                        Image(systemName: LDOIcon.pinned)
+                            .font(.caption2.weight(.medium))
                             .foregroundStyle(.orange)
                     }
                     if topic.closed {
-                        Image(systemName: "lock.fill")
-                            .font(.caption2)
+                        Image(systemName: LDOIcon.closed)
+                            .font(.caption2.weight(.medium))
                             .foregroundStyle(.secondary)
                     }
                     Text(topic.title)
@@ -40,16 +40,16 @@ struct TopicRowView: View {
             }
 
             HStack(spacing: 12) {
-                LDOMetric(value: topic.replyCount, systemImage: "bubble.right", help: "回复")
+                LDOMetric(value: topic.replyCount, systemImage: LDOIcon.replies, help: "回复")
                 if topic.views > 0 {
-                    LDOMetric(value: topic.views, systemImage: "eye", help: "浏览")
+                    LDOMetric(value: topic.views, systemImage: LDOIcon.views, help: "浏览")
                 }
                 if topic.likeCount > 0 {
-                    LDOMetric(value: topic.likeCount, systemImage: "heart", help: "赞")
+                    LDOMetric(value: topic.likeCount, systemImage: LDOIcon.heart, help: "赞")
                 }
                 Spacer(minLength: 4)
                 if let user = topic.lastPosterUsername {
-                    Label(user, systemImage: "person.crop.circle")
+                    Label(user, systemImage: LDOIcon.person)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .labelStyle(.titleAndIcon)
@@ -71,14 +71,14 @@ struct TopicRowView: View {
                         LDOHighlightIndicator(
                             text: keyword,
                             color: highlight?.keywordColor ?? .accentColor,
-                            systemImage: "text.magnifyingglass"
+                            systemImage: LDOIcon.search
                         )
                     }
                     if let followedUsername {
                         LDOHighlightIndicator(
                             text: "关注用户",
                             color: followedColor,
-                            systemImage: "person.badge.checkmark"
+                            systemImage: LDOIcon.followed
                         )
                         .help("已关注 @\(followedUsername)")
                     }

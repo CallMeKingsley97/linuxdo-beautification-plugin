@@ -10,6 +10,7 @@ final class ReadingTracker {
     typealias Reporter = (_ topicID: Int, _ timings: [Int: Int], _ topicTime: Int) async throws -> Void
     typealias ReportingStateHandler = (_ postNumbers: Set<Int>, _ reporting: Bool) -> Void
     typealias ReadStateHandler = (_ postNumbers: Set<Int>) -> Void
+    typealias SyncFailureHandler = (_ postNumbers: Set<Int>, _ error: Error) -> Void
 
     private struct Batch {
         let topicID: Int
@@ -24,17 +25,25 @@ final class ReadingTracker {
     private static let pauseUnlessScrolledMilliseconds = 3 * 60_000
     private static let maximumPostTrackingMilliseconds = 6 * 60_000
     private static let retryDelays: [Duration] = [
-        .seconds(5), .seconds(10), .seconds(20), .seconds(40),
+        .seconds(5), .seconds(10), .seconds(20), .seconds(40), .seconds(60), .seconds(90),
     ]
     private static let retryableHTTPStatuses: Set<Int> = [405, 429, 500, 501, 502, 503, 504]
+    private static let postDiscardCooldown: TimeInterval = 30
 
     private var topicID: Int?
     private var reporter: Reporter?
     private var onReporting: ReportingStateHandler?
+    private var onPendingRead: ReadStateHandler?
     private var onRead: ReadStateHandler?
+    private var onSyncFailed: SyncFailureHandler?
 
     private var visiblePostNumbers: Set<Int> = []
     private var readPostNumbers: Set<Int> = []
+    private var pendingReadPostNumbers: Set<Int> = []
+    /// 服务端已确认的已读楼层（初始种子或上报成功），失败回滚时不该被抹掉。
+    private var serverConfirmedPostNumbers: Set<Int> = []
+    /// 是否由服务端持久化阅读状态；为 false 时（未登录）本地停留即视为已读。
+    private var reportsRemotely = false
     private var timings: [Int: Int] = [:]
     private var totalTimings: [Int: Int] = [:]
     private var topicTime = 0
@@ -56,17 +65,25 @@ final class ReadingTracker {
         topicID: Int,
         initiallyRead: Set<Int>,
         focused: Bool,
+        reportsRemotely: Bool,
         reporter: @escaping Reporter,
         onReporting: @escaping ReportingStateHandler,
-        onRead: @escaping ReadStateHandler
+        onPendingRead: @escaping ReadStateHandler,
+        onRead: @escaping ReadStateHandler,
+        onSyncFailed: @escaping SyncFailureHandler
     ) {
         stop()
         generation &+= 1
         self.topicID = topicID
         self.reporter = reporter
         self.onReporting = onReporting
+        self.onPendingRead = onPendingRead
         self.onRead = onRead
+        self.onSyncFailed = onSyncFailed
         readPostNumbers = initiallyRead
+        serverConfirmedPostNumbers = initiallyRead
+        pendingReadPostNumbers = []
+        self.reportsRemotely = reportsRemotely
         isFocused = focused
         isRunning = true
 
@@ -127,6 +144,7 @@ final class ReadingTracker {
 
     func seedRead(_ postNumbers: Set<Int>) {
         readPostNumbers.formUnion(postNumbers)
+        serverConfirmedPostNumbers.formUnion(postNumbers)
     }
 
     private func startTicking() {
@@ -160,6 +178,23 @@ final class ReadingTracker {
             let total = totalTimings[postNumber] ?? 0
             guard total < Self.maximumPostTrackingMilliseconds else { continue }
             timings[postNumber, default: 0] += milliseconds
+        }
+
+        let locallyRead = visiblePostNumbers.filter { postNumber in
+            !readPostNumbers.contains(postNumber)
+                && !pendingReadPostNumbers.contains(postNumber)
+                && (totalTimings[postNumber] ?? 0) + (timings[postNumber] ?? 0)
+                    >= Self.minimumReadMilliseconds
+        }
+        if !locallyRead.isEmpty {
+            if reportsRemotely {
+                // 等服务端确认后再标记已读：小标先消失会让本地与服务端状态不一致。
+                pendingReadPostNumbers.formUnion(locallyRead)
+                onPendingRead?(Set(locallyRead))
+            } else {
+                readPostNumbers.formUnion(locallyRead)
+                onRead?(Set(locallyRead))
+            }
         }
 
         let hasNewReadablePost = timings.contains { postNumber, milliseconds in
@@ -241,7 +276,9 @@ final class ReadingTracker {
                 self.inProgress = false
                 self.retryCount = 0
                 self.blockSendingUntil = nil
+                self.pendingReadPostNumbers.subtract(postNumbers)
                 self.readPostNumbers.formUnion(postNumbers)
+                self.serverConfirmedPostNumbers.formUnion(postNumbers)
                 self.onReporting?(postNumbers, false)
                 self.onRead?(postNumbers)
                 #if DEBUG
@@ -262,9 +299,7 @@ final class ReadingTracker {
 
     private func handleFailure(_ batch: Batch, error: Error) {
         guard shouldRetry(error), retryCount < Self.retryDelays.count else {
-            #if DEBUG
-            print("[LINUXDOReader][Reading] report dropped topic=\(batch.topicID) error=\(error.localizedDescription)")
-            #endif
+            discard(batch, error: error)
             return
         }
 
@@ -284,6 +319,32 @@ final class ReadingTracker {
         #endif
     }
 
+    /// 重试用尽后放弃这批计时：本地回到"未读"，等待下次停留重新累计并上报。
+    private func discard(_ batch: Batch, error: Error) {
+        let batchPostNumbers = Set(batch.timings.keys)
+        var unconfirmed: Set<Int> = []
+        for postNumber in batchPostNumbers {
+            totalTimings.removeValue(forKey: postNumber)
+            timings.removeValue(forKey: postNumber)
+            pendingReadPostNumbers.remove(postNumber)
+            guard !serverConfirmedPostNumbers.contains(postNumber) else { continue }
+            readPostNumbers.remove(postNumber)
+            unconfirmed.insert(postNumber)
+        }
+        // 失败后短暂退避，避免长时间异常时反复冲击站点。
+        blockSendingUntil = Date().addingTimeInterval(Self.postDiscardCooldown)
+        retryCount = 0
+
+        #if DEBUG
+        print("[LINUXDOReader][Reading] report dropped topic=\(batch.topicID) posts=\(batchPostNumbers.sorted()) error=\(error.localizedDescription)")
+        #endif
+
+        if reportsRemotely, !unconfirmed.isEmpty {
+            onSyncFailed?(unconfirmed, error)
+        }
+        sendNextIfNeeded()
+    }
+
     private func drainQueuedBatch() {
         guard let batch = queuedBatch, let reporter else { return }
         queuedBatch = nil
@@ -295,11 +356,12 @@ final class ReadingTracker {
     private func shouldRetry(_ error: Error) -> Bool {
         guard let requestError = error as? SiteRequestError else { return false }
         switch requestError {
-        case .hostNotReady:
+        case .hostNotReady, .challengeRequired:
+            // 宿主页被 Cloudflare 挑战或尚未就绪时，重建宿主页后重试即可恢复。
             return true
         case .http(let status, _):
             return Self.retryableHTTPStatuses.contains(status)
-        case .invalidResponse, .loginRequired, .challengeRequired:
+        case .invalidResponse, .loginRequired:
             return false
         }
     }
@@ -308,9 +370,14 @@ final class ReadingTracker {
         topicID = nil
         reporter = nil
         onReporting = nil
+        onPendingRead = nil
         onRead = nil
+        onSyncFailed = nil
         visiblePostNumbers = []
         readPostNumbers = []
+        serverConfirmedPostNumbers = []
+        pendingReadPostNumbers = []
+        reportsRemotely = false
         timings = [:]
         totalTimings = [:]
         topicTime = 0

@@ -16,11 +16,13 @@ struct SiteBrowserView: View {
                 SiteWebView(store: store)
                 if let error = store.errorMessage {
                     ContentUnavailableView {
-                        Label("页面加载失败", systemImage: "wifi.exclamationmark")
+                        Label("页面加载失败", systemImage: LDOIcon.error)
                     } description: {
                         Text(error)
                     } actions: {
                         Button("重新加载") { store.reload() }
+                            .buttonStyle(.borderedProminent)
+                            .keyboardShortcut(.defaultAction)
                     }
                     .background(.background)
                 }
@@ -36,25 +38,28 @@ struct SiteBrowserView: View {
         HStack(spacing: 8) {
             HStack(spacing: 2) {
                 Button(action: store.goBack) {
-                    Image(systemName: "chevron.left")
+                    Label("后退", systemImage: LDOIcon.chevronBackward)
+                        .labelStyle(.iconOnly)
                 }
                 .disabled(!store.canGoBack)
                 .help("后退")
 
                 Button(action: store.goForward) {
-                    Image(systemName: "chevron.right")
+                    Label("前进", systemImage: LDOIcon.chevronForward)
+                        .labelStyle(.iconOnly)
                 }
                 .disabled(!store.canGoForward)
                 .help("前进")
 
                 Button(action: store.goHome) {
-                    Image(systemName: "house")
+                    Label("LINUX DO 首页", systemImage: LDOIcon.home)
+                        .labelStyle(.iconOnly)
                 }
                 .help("LINUX DO 首页")
             }
 
             HStack(spacing: 6) {
-                Image(systemName: "lock.fill")
+                Image(systemName: LDOIcon.secure)
                     .font(.caption2)
                 Text(store.currentURL?.host ?? "linux.do")
                     .lineLimit(1)
@@ -63,7 +68,10 @@ struct SiteBrowserView: View {
             .foregroundStyle(.secondary)
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, minHeight: 26)
-            .background(LDOTheme.subtleFill, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .background(
+                LDOTheme.subtleFill,
+                in: RoundedRectangle(cornerRadius: LDOTheme.compactCornerRadius, style: .continuous)
+            )
 
             if store.isLoading {
                 ProgressView()
@@ -71,7 +79,8 @@ struct SiteBrowserView: View {
             }
 
             Button(action: store.reload) {
-                Image(systemName: "arrow.clockwise")
+                Label("重新加载", systemImage: LDOIcon.refresh)
+                    .labelStyle(.iconOnly)
             }
             .help("重新加载")
         }

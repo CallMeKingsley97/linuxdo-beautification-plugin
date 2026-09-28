@@ -57,7 +57,7 @@ struct UserProfileView: View {
 
     private func failurePane(_ message: String) -> some View {
         ContentUnavailableView {
-            Label("用户资料加载失败", systemImage: "person.crop.circle.badge.exclamationmark")
+            Label("用户资料加载失败", systemImage: LDOIcon.account)
         } description: {
             Text(message)
         } actions: {
@@ -99,8 +99,8 @@ struct UserProfileView: View {
                 }
             }
             .frame(maxWidth: LDOTheme.readerMaxWidth, alignment: .leading)
-            .padding(.horizontal, 28)
-            .padding(.vertical, 24)
+            .padding(.horizontal, LDOTheme.spacing24)
+            .padding(.vertical, LDOTheme.spacing24)
             .frame(maxWidth: .infinity)
         }
     }
@@ -169,7 +169,7 @@ struct UserProfileView: View {
                             profile.endorsedCategoryIDs.isEmpty
                                 ? "认可"
                                 : "已认可 · \(profile.endorsedCategoryIDs.count)",
-                            systemImage: "checkmark.seal"
+                            systemImage: LDOIcon.checkmarkSeal
                         )
                     }
                     .buttonStyle(.bordered)
@@ -189,7 +189,7 @@ struct UserProfileView: View {
             } else {
                 Label(
                     profile.isFollowed ? "已关注" : "关注",
-                    systemImage: profile.isFollowed ? "person.badge.checkmark" : "person.badge.plus"
+                    systemImage: profile.isFollowed ? LDOIcon.followed : LDOIcon.login
                 )
             }
         }
@@ -215,13 +215,13 @@ struct UserProfileView: View {
     @ViewBuilder
     private func profileMetadataItems(_ profile: UserProfileDetail) -> some View {
             if let createdAt = profile.createdAt {
-                Label("加入于 \(createdAt.formatted(date: .abbreviated, time: .omitted))", systemImage: "calendar")
+                Label("加入于 \(createdAt.formatted(date: .abbreviated, time: .omitted))", systemImage: LDOIcon.calendar)
             }
             if let lastPostedAt = profile.lastPostedAt {
-                Label("最近发帖 \(lastPostedAt.ldoRelativeDescription)", systemImage: "clock")
+                Label("最近发帖 \(lastPostedAt.ldoRelativeDescription)", systemImage: LDOIcon.latest)
             }
             if profile.profileViewCount > 0 {
-                Label(profile.profileViewCount.formatted(), systemImage: "eye")
+                Label(profile.profileViewCount.formatted(), systemImage: LDOIcon.views)
                     .help("资料页浏览量")
             }
             if profile.followerCount > 0 || profile.followingCount > 0 {
@@ -239,18 +239,18 @@ struct UserProfileView: View {
                 alignment: .leading,
                 spacing: 12
             ) {
-                ProfileMetricView(title: "访问天数", value: stats.daysVisited.formatted(), systemImage: "calendar.badge.clock")
-                ProfileMetricView(title: "阅读时长", value: Self.readingTime(stats.timeReadSeconds), systemImage: "book.pages")
-                ProfileMetricView(title: "浏览话题", value: stats.topicsEntered.formatted(), systemImage: "rectangle.stack")
-                ProfileMetricView(title: "发布话题", value: stats.topicCount.formatted(), systemImage: "text.bubble")
-                ProfileMetricView(title: "回复", value: stats.postCount.formatted(), systemImage: "bubble.left.and.bubble.right")
-                ProfileMetricView(title: "获赞", value: stats.likesReceived.formatted(), systemImage: "heart.fill", tint: .red)
-                ProfileMetricView(title: "送出赞", value: stats.likesGiven.formatted(), systemImage: "hand.thumbsup")
+                ProfileMetricView(title: "访问天数", value: stats.daysVisited.formatted(), systemImage: LDOIcon.calendar)
+                ProfileMetricView(title: "阅读时长", value: Self.readingTime(stats.timeReadSeconds), systemImage: LDOIcon.readingTime)
+                ProfileMetricView(title: "浏览话题", value: stats.topicsEntered.formatted(), systemImage: LDOIcon.topics)
+                ProfileMetricView(title: "发布话题", value: stats.topicCount.formatted(), systemImage: LDOIcon.textBubble)
+                ProfileMetricView(title: "回复", value: stats.postCount.formatted(), systemImage: LDOIcon.conversation)
+                ProfileMetricView(title: "获赞", value: stats.likesReceived.formatted(), systemImage: LDOIcon.heartFill, tint: .red)
+                ProfileMetricView(title: "送出赞", value: stats.likesGiven.formatted(), systemImage: LDOIcon.agree)
                 if let solvedCount = stats.solvedCount {
                     Button {
                         showsSolved = true
                     } label: {
-                        ProfileMetricView(title: "解决方案", value: solvedCount.formatted(), systemImage: "checkmark.seal.fill", tint: .green)
+                        ProfileMetricView(title: "解决方案", value: solvedCount.formatted(), systemImage: LDOIcon.solved, tint: .green)
                     }
                     .buttonStyle(.plain)
                     .disabled(solvedCount == 0)
@@ -335,7 +335,7 @@ struct UserProfileView: View {
     @ViewBuilder
     private func topicRows(_ topics: [UserTopTopic]) -> some View {
         if topics.isEmpty {
-            ProfileEmptyRow(text: "暂无热门话题", systemImage: "text.bubble")
+            ProfileEmptyRow(text: "暂无热门话题", systemImage: LDOIcon.textBubble)
         } else {
             VStack(spacing: 0) {
                 ForEach(topics) { topic in
@@ -356,7 +356,7 @@ struct UserProfileView: View {
     @ViewBuilder
     private func replyRows(_ replies: [UserTopReply]) -> some View {
         if replies.isEmpty {
-            ProfileEmptyRow(text: "暂无热门回复", systemImage: "bubble.left")
+            ProfileEmptyRow(text: "暂无热门回复", systemImage: LDOIcon.replies)
         } else {
             VStack(spacing: 0) {
                 ForEach(replies) { reply in
@@ -394,7 +394,7 @@ struct UserProfileView: View {
                     Text("正在加载动态…").foregroundStyle(.secondary)
                 }
             } else if viewModel.activityItems.isEmpty {
-                ProfileEmptyRow(text: "暂无相关动态", systemImage: "clock.arrow.circlepath")
+            ProfileEmptyRow(text: "暂无相关动态", systemImage: LDOIcon.latest)
             } else {
                 VStack(spacing: 0) {
                     ForEach(viewModel.activityItems) { item in
@@ -406,17 +406,10 @@ struct UserProfileView: View {
                 }
 
                 if viewModel.hasMoreActivity || viewModel.isLoadingActivity {
-                    Button(action: viewModel.loadMoreActivity) {
-                        HStack(spacing: 6) {
-                            if viewModel.isLoadingActivity {
-                                ProgressView().controlSize(.small)
-                            }
-                            Text(viewModel.isLoadingActivity ? "正在加载…" : "加载更多")
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(viewModel.isLoadingActivity)
+                    LDOLoadMoreButton(
+                        isLoading: viewModel.isLoadingActivity,
+                        action: viewModel.loadMoreActivity
+                    )
                 }
             }
         }
@@ -426,7 +419,7 @@ struct UserProfileView: View {
     private var profileToolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
             Button(action: appState.closeUserProfile) {
-                Label("返回", systemImage: "chevron.backward")
+                Label("返回", systemImage: LDOIcon.chevronBackward)
             }
             .help("返回上一页")
 
@@ -434,14 +427,15 @@ struct UserProfileView: View {
                 if case .loading = viewModel.phase {
                     ProgressView().controlSize(.small)
                 } else {
-                    Label("刷新", systemImage: "arrow.clockwise")
+                    Label("刷新", systemImage: LDOIcon.refresh)
                 }
             }
+            .help("刷新用户资料")
 
             Button {
                 NSWorkspace.shared.open(Endpoints.userPage(username: route.username))
             } label: {
-                Label("网页版资料", systemImage: "globe")
+                Label("网页版资料", systemImage: LDOIcon.web)
             }
             .help("在浏览器中打开用户资料")
         }
@@ -494,7 +488,7 @@ private struct ProfileStatusView: View {
             if let emoji = Self.nativeEmoji[shortcode] {
                 Text(emoji)
             } else {
-                Image(systemName: "face.smiling")
+                Image(systemName: LDOIcon.faceSmiling)
                     .foregroundStyle(.secondary)
             }
         }
@@ -666,7 +660,7 @@ private struct ProfileLinkRow: View {
                 if metric > 0 {
                     LDOMetric(value: metric, systemImage: metricImage)
                 }
-                Image(systemName: "chevron.right")
+                Image(systemName: LDOIcon.chevronRight)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
@@ -705,7 +699,7 @@ private struct ActivityRow: View {
                     }
                 }
                 Spacer(minLength: 8)
-                Image(systemName: "chevron.right")
+                Image(systemName: LDOIcon.chevronRight)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
@@ -756,13 +750,13 @@ private struct UserBadgesSheet: View {
                 Spacer()
                 Button("完成") { dismiss() }.keyboardShortcut(.defaultAction)
             }
-            .padding(16)
+            .padding(LDOTheme.spacing16)
             Divider()
 
             if viewModel.isLoadingBadges, viewModel.badgeGroups.isEmpty {
                 LoadingPane(message: "正在加载徽章…")
             } else if let error = viewModel.badgesError, viewModel.badgeGroups.isEmpty {
-                ContentUnavailableView("徽章加载失败", systemImage: "medal", description: Text(error))
+                ContentUnavailableView("徽章加载失败", systemImage: LDOIcon.medal, description: Text(error))
             } else {
                 List {
                     ForEach(viewModel.badgeGroups) { group in
@@ -810,13 +804,13 @@ private struct UserSolvedSheet: View {
                 Spacer()
                 Button("完成") { dismiss() }.keyboardShortcut(.defaultAction)
             }
-            .padding(16)
+            .padding(LDOTheme.spacing16)
             Divider()
 
             if viewModel.isLoadingSolved, viewModel.solvedItems.isEmpty {
                 LoadingPane(message: "正在加载解决方案…")
             } else if let error = viewModel.solvedError, viewModel.solvedItems.isEmpty {
-                ContentUnavailableView("加载失败", systemImage: "checkmark.seal", description: Text(error))
+                ContentUnavailableView("加载失败", systemImage: LDOIcon.checkmarkSeal, description: Text(error))
             } else {
                 List {
                     ForEach(viewModel.solvedItems) { item in
@@ -845,10 +839,11 @@ private struct UserSolvedSheet: View {
                     }
 
                     if viewModel.hasMoreSolved || viewModel.isLoadingSolved {
-                        Button(viewModel.isLoadingSolved ? "正在加载…" : "加载更多") {
+                        LDOLoadMoreButton(
+                            isLoading: viewModel.isLoadingSolved
+                        ) {
                             viewModel.loadSolved(reset: false)
                         }
-                        .disabled(viewModel.isLoadingSolved)
                     }
                 }
             }
@@ -878,7 +873,7 @@ private struct UserEndorsementSheet: View {
                 }
                 .frame(maxWidth: .infinity, minHeight: 120)
             } else if viewModel.endorsableCategories.isEmpty {
-                ContentUnavailableView("暂无可认可类别", systemImage: "checkmark.seal")
+                ContentUnavailableView("暂无可认可类别", systemImage: LDOIcon.checkmarkSeal)
                     .frame(minHeight: 160)
             } else {
                 VStack(alignment: .leading, spacing: 8) {
@@ -892,9 +887,9 @@ private struct UserEndorsementSheet: View {
                             }
                         )) {
                             HStack(spacing: 7) {
-                                Circle()
-                                    .fill(Color(hex: category.color ?? "") ?? .secondary)
-                                    .frame(width: 7, height: 7)
+                                LDOCategoryDot(
+                                    color: Color(hex: category.color ?? "") ?? .secondary
+                                )
                                 Text(category.name)
                             }
                         }
@@ -928,7 +923,7 @@ private struct UserEndorsementSheet: View {
                 }
             }
         }
-        .padding(20)
+        .padding(LDOTheme.spacing24)
         .frame(width: 440)
         .task { viewModel.loadEndorsableCategories() }
     }

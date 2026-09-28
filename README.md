@@ -21,7 +21,7 @@
 ## 使用方式
 
 1. 在 Tampermonkey 中新建脚本。
-2. 使用 [`linuxdo-beautification.user.js`](./linuxdo-beautification.user.js) 的内容。
+2. 使用 [`userscript/linuxdo-beautification.user.js`](./userscript/linuxdo-beautification.user.js) 的内容。
 3. 保存后访问 `https://linux.do`。
 4. 在 Tampermonkey 菜单中打开“LINUX DO 美化设置”，配置关注高亮颜色和关键词规则。
 
@@ -47,7 +47,7 @@
 |---|---|
 | 目录 | [`macos-reader/`](./macos-reader/) |
 | 进度 | [`macos-reader/ROADMAP.md`](./macos-reader/ROADMAP.md) |
-| 方案 | [`LINUXDO_macOS_SwiftUI_阅读器方案.md`](./LINUXDO_macOS_SwiftUI_阅读器方案.md) |
+| 方案 | [`docs/LINUXDO_macOS_SwiftUI_阅读器方案.md`](./docs/LINUXDO_macOS_SwiftUI_阅读器方案.md) |
 | 当前阶段 | P1 匿名读帖（最新/热门列表 + 主题详情） |
 | 运行环境 | **仅 Mac + Xcode 15+**（Windows 无法编译） |
 

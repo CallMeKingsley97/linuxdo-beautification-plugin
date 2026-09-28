@@ -5,7 +5,7 @@
 > UI 技术栈：**SwiftUI + Apple 原生框架**  
 > 站点：`https://linux.do`（Discourse）  
 > 分发方式：**直接分发（已确认，不走 App Store）**  
-> 关联项目：本仓库油猴脚本 `linuxdo-beautification.user.js`（网页增强继续维护；桌面端为独立产品线）
+> 关联项目：本仓库油猴脚本 `userscript/linuxdo-beautification.user.js`（网页增强继续维护；桌面端为独立产品线）
 
 ---
 
@@ -867,9 +867,9 @@ App 组装注入
 
 | 项目 | 路径 | 职责 |
 |---|---|---|
-| 油猴美化脚本 | `linuxdo-beautification.user.js` | 浏览器内增强 |
-| 油猴新功能方案 | `LINUXDO_新功能具体实现方案.md` | 网页端 8 项增强约束 |
-| **本方案** | `LINUXDO_macOS_SwiftUI_阅读器方案.md` | macOS 原生阅读器蓝图 |
+| 油猴美化脚本 | `userscript/linuxdo-beautification.user.js` | 浏览器内增强 |
+| 油猴新功能方案 | `docs/LINUXDO_新功能具体实现方案.md` | 网页端 8 项增强约束 |
+| **本方案** | `docs/LINUXDO_macOS_SwiftUI_阅读器方案.md` | macOS 原生阅读器蓝图 |
 
 协作原则：
 

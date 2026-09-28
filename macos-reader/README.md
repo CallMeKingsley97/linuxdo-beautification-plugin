@@ -10,7 +10,7 @@
 | 当前版本 | **0.7.0 · 关注作者与关键词高亮** |
 | 进度 | 见 [ROADMAP.md](./ROADMAP.md) |
 | UI 标准 | [../AGENTS.md](../AGENTS.md) 的 `macos-reader UI 设计标准` |
-| 总方案 | [../LINUXDO_macOS_SwiftUI_阅读器方案.md](../LINUXDO_macOS_SwiftUI_阅读器方案.md) |
+| 总方案 | [../docs/LINUXDO_macOS_SwiftUI_阅读器方案.md](../docs/LINUXDO_macOS_SwiftUI_阅读器方案.md) |
 
 ---
 

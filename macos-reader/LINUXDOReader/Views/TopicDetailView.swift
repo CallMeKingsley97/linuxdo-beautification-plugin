@@ -85,7 +85,7 @@ struct TopicDetailView: View {
 
     private var emptySelection: some View {
         ContentUnavailableView {
-            Label("选择一个主题", systemImage: "sidebar.right")
+            Label("选择一个主题", systemImage: LDOIcon.sidebar)
         } description: {
             Text("主题正文会在这里以原生阅读视图显示。")
         }
@@ -95,7 +95,7 @@ struct TopicDetailView: View {
 
     private func failurePane(message: String) -> some View {
         ContentUnavailableView {
-            Label("主题加载失败", systemImage: "exclamationmark.triangle")
+            Label("主题加载失败", systemImage: LDOIcon.warning)
         } description: {
             Text(message)
         } actions: {
@@ -115,37 +115,26 @@ struct TopicDetailView: View {
     private func detailScroll(_ detail: TopicDetail) -> some View {
         VStack(spacing: 0) {
             if case .failed(let message) = viewModel.phase {
-                HStack(spacing: 8) {
-                    Label(message, systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                        .font(.caption)
-                    Spacer()
+                LDOInlineBanner(
+                    message: message,
+                    systemImage: LDOIcon.warning,
+                    isWarning: true,
+                    horizontalPadding: LDOTheme.spacing24
+                ) {
                     Button("重试") { viewModel.reload() }
+                        .buttonStyle(.bordered)
                         .controlSize(.small)
                 }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 10)
-                .background(Color.orange.opacity(0.08))
             }
 
             if let actionMessage = viewModel.actionMessage {
-                HStack(spacing: 8) {
-                    Label(actionMessage, systemImage: "info.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button {
-                        viewModel.clearActionMessage()
-                    } label: {
-                        Image(systemName: "xmark")
-                    }
-                    .buttonStyle(.plain)
-                    .help("关闭提示")
+                LDOInlineBanner(
+                    message: actionMessage,
+                    systemImage: LDOIcon.info,
+                    horizontalPadding: LDOTheme.spacing24
+                ) {
+                    LDOBannerDismissButton { viewModel.clearActionMessage() }
                 }
-                .padding(.horizontal, 24)
-                .frame(minHeight: 34)
-                .background(.bar)
-                .overlay(alignment: .bottom) { Divider() }
             }
 
             TopicDocumentWebView(
@@ -190,16 +179,25 @@ struct TopicDetailView: View {
                     if case .loading = viewModel.phase {
                         ProgressView().controlSize(.small)
                     } else {
-                        Label("刷新", systemImage: "arrow.clockwise")
+                        Label("刷新", systemImage: LDOIcon.refresh)
                     }
                 }
+                .help("刷新主题")
+                .accessibilityLabel("刷新主题")
 
-                Button {
-                    appState.openTopicInSite(id: detail.id, slug: detail.slug)
+                Menu {
+                    Button {
+                        appState.openTopicInSite(id: detail.id, slug: detail.slug)
+                    } label: {
+                        Label("在网页中打开", systemImage: LDOIcon.web)
+                    }
+                    .help("仅在原生内容异常时使用站内网页")
                 } label: {
-                    Label("兼容网页", systemImage: "globe")
+                    Image(systemName: LDOIcon.more)
                 }
-                .help("仅在原生内容异常时使用站内网页")
+                .menuIndicator(.hidden)
+                .help("更多主题操作")
+                .accessibilityLabel("更多主题操作")
 
                 Button {
                     if appState.siteSession.isLoggedIn {
@@ -208,7 +206,7 @@ struct TopicDetailView: View {
                         appState.openLogin()
                     }
                 } label: {
-                    Label(appState.siteSession.isLoggedIn ? "回复" : "登录", systemImage: "square.and.pencil")
+                    Label(appState.siteSession.isLoggedIn ? "回复" : "登录", systemImage: LDOIcon.compose)
                 }
                 .help(appState.siteSession.isLoggedIn ? "在 App 内回复此主题" : "登录后回复和访问受限主题")
             }
@@ -217,27 +215,29 @@ struct TopicDetailView: View {
 
     private func pagingBar(_ detail: TopicDetail) -> some View {
         HStack(spacing: 12) {
-            Text("已显示 \(detail.posts.count.formatted()) / \(detail.postsCount.formatted()) 层")
+            Label(loadedRangeDescription(for: detail), systemImage: LDOIcon.readingTime)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
             Spacer()
-            Button(action: viewModel.loadMore) {
-                HStack(spacing: 6) {
-                    if viewModel.isLoadingMore {
-                        ProgressView().controlSize(.small)
-                    }
-                    Text(viewModel.isLoadingMore ? "正在加载…" : "加载更多")
-                }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(viewModel.isLoadingMore)
+            LDOLoadMoreButton(
+                isLoading: viewModel.isLoadingMore,
+                controlSize: .small,
+                action: viewModel.loadMore
+            )
         }
-        .padding(.horizontal, 16)
-        .frame(height: 42)
+        .padding(.horizontal, LDOTheme.spacing16)
+        .frame(height: LDOTheme.detailPagingBarHeight)
         .background(.bar)
         .overlay(alignment: .top) { Divider() }
+    }
+
+    private func loadedRangeDescription(for detail: TopicDetail) -> String {
+        guard let first = detail.posts.first?.postNumber,
+              let last = detail.posts.last?.postNumber else {
+            return "暂无楼层"
+        }
+        return "已显示 #\(first)–#\(last) / \(detail.postsCount.formatted()) 层"
     }
 
     private func beginReply(to postNumber: Int?) {
@@ -399,7 +399,7 @@ private struct ReactionPickerView: View {
                             HStack(spacing: 3) {
                                 Text(option.title)
                                 if currentReaction == option.id {
-                                    Image(systemName: "checkmark")
+                                    Image(systemName: LDOIcon.checkmark)
                                 }
                             }
                             .font(.caption2)
@@ -485,7 +485,7 @@ private struct BookmarkEditorView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
-                Label(isBookmarked ? "编辑收藏" : "收藏楼层", systemImage: "bookmark")
+                Label(isBookmarked ? "编辑收藏" : "收藏楼层", systemImage: LDOIcon.bookmark)
                     .font(.headline)
                 Text("可以只收藏，也可以让系统在指定时间提醒你回来阅读。")
                     .font(.caption)
@@ -586,7 +586,7 @@ private struct FlagPostView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
-                Label("举报或联系作者", systemImage: "flag")
+                Label("举报或联系作者", systemImage: LDOIcon.flag)
                     .font(.headline)
                 Text("请选择最准确的原因。举报会进入站点审核流程，不会在 App 内公开。")
                     .font(.caption)
@@ -599,7 +599,7 @@ private struct FlagPostView: View {
             } else if availableTypes.isEmpty {
                 ContentUnavailableView(
                     "当前无法举报",
-                    systemImage: "flag.slash",
+                    systemImage: LDOIcon.flagDisabled,
                     description: Text("该楼层可能已举报，或当前账号没有相应权限。")
                 )
             } else {
@@ -740,7 +740,7 @@ private struct BoostComposerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
-                Label("发送 Boost", systemImage: "rocket")
+                Label("发送 Boost", systemImage: LDOIcon.rocket)
                     .font(.headline)
                 Text("用一句不超过 16 个字符的短消息为这层内容助力。")
                     .font(.caption)
@@ -802,7 +802,7 @@ private struct EditPostView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
-                Label("编辑帖子", systemImage: "pencil")
+                Label("编辑帖子", systemImage: LDOIcon.pencil)
                     .font(.headline)
                 Text("保存后由 LINUX DO 重新渲染正文，修订记录仍由站点保留。")
                     .font(.caption)
@@ -865,7 +865,7 @@ private struct ReplyComposerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 10) {
-                Image(systemName: "square.and.pencil")
+                Image(systemName: LDOIcon.compose)
                     .font(.title2)
                     .foregroundStyle(.tint)
                 VStack(alignment: .leading, spacing: 2) {
@@ -899,7 +899,7 @@ private struct ReplyComposerView: View {
             }
 
             if let message = viewModel.replyMessage {
-                Label(message, systemImage: "info.circle")
+                Label(message, systemImage: LDOIcon.info)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

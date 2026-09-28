@@ -42,13 +42,13 @@ struct PostCardView: View {
                                     .foregroundStyle(.secondary)
                             }
                             if post.acceptedAnswer {
-                                LDOStatusBadge(text: "已采纳", color: .green, systemImage: "checkmark")
+                                LDOStatusBadge(text: "已采纳", color: .green, systemImage: LDOIcon.checkmark)
                             }
                             if isFollowedAuthor {
                                 LDOStatusBadge(
                                     text: "已关注",
                                     color: followedColor,
-                                    systemImage: "person.badge.checkmark"
+                                    systemImage: LDOIcon.followed
                                 )
                             }
                         }
@@ -60,7 +60,7 @@ struct PostCardView: View {
                                 Text(createdAt.formatted(date: .abbreviated, time: .shortened))
                             }
                             if let replyTo = post.replyToPostNumber {
-                                Label("回复 #\(replyTo)", systemImage: "arrowshape.turn.up.left")
+                                Label("回复 #\(replyTo)", systemImage: LDOIcon.reply)
                             }
                         }
                         .font(.caption2)
@@ -72,13 +72,14 @@ struct PostCardView: View {
                         Button {
                             onReply(post)
                         } label: {
-                            Label("回复", systemImage: "arrowshape.turn.up.left")
+                            Label("回复", systemImage: LDOIcon.reply)
                                 .labelStyle(.iconOnly)
                         }
                         .buttonStyle(.borderless)
                         .controlSize(.small)
                         .opacity(0.72)
                         .help("回复 #\(post.postNumber)")
+                        .accessibilityLabel("回复第 \(post.postNumber) 层")
                     }
                 }
 
@@ -90,8 +91,8 @@ struct PostCardView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 18)
+        .padding(.horizontal, LDOTheme.spacing24)
+        .padding(.vertical, LDOTheme.spacing16)
         .background {
             ZStack {
                 rowBackground
@@ -104,7 +105,7 @@ struct PostCardView: View {
     }
 
     private var rowBackground: Color {
-        if post.acceptedAnswer { return Color.green.opacity(0.055) }
+        if post.acceptedAnswer { return LDOTheme.acceptedAnswerFill }
         return .clear
     }
 }

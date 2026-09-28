@@ -18,6 +18,7 @@ struct AvatarView: View {
                         image
                             .resizable()
                             .scaledToFill()
+                            .transition(.opacity)
                     case .failure:
                         placeholder
                     case .empty:
@@ -38,7 +39,7 @@ struct AvatarView: View {
     private var placeholder: some View {
         ZStack {
             Color.secondary.opacity(0.15)
-            Image(systemName: "person.fill")
+            Image(systemName: LDOIcon.personFill)
                 .font(.system(size: size * 0.42))
                 .foregroundStyle(.secondary)
         }

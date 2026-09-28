@@ -30,7 +30,8 @@ final class TopicDetailViewModel: ObservableObject {
     private var topicID: Int?
     private var loadTask: Task<Void, Never>?
     private var trackingTopicID: Int?
-    private var readingEnabled = false
+    private var isLoggedIn = false
+    private var reportRemotely = false
     private var readingFocused = true
 
     init(api: APIClient) {
@@ -496,16 +497,15 @@ final class TopicDetailViewModel: ObservableObject {
     }
 
     func updateReadingSession(isLoggedIn: Bool, isFocused: Bool) {
-        readingEnabled = isLoggedIn
+        self.isLoggedIn = isLoggedIn
         readingFocused = isFocused
 
-        guard isLoggedIn else {
-            stopReading()
-            return
-        }
-
         if trackingTopicID == nil {
-            startReadingIfPossible()
+            startReadingIfPossible(reportRemotely: isLoggedIn)
+        } else if reportRemotely != isLoggedIn {
+            readingTracker.stop()
+            trackingTopicID = nil
+            startReadingIfPossible(reportRemotely: isLoggedIn)
         } else {
             readingTracker.setFocused(isFocused)
         }
@@ -532,7 +532,7 @@ final class TopicDetailViewModel: ObservableObject {
             readPostNumbers = detail.initiallyReadPostNumbers
             reportingPostNumbers = []
             phase = .loaded
-            startReadingIfPossible()
+            startReadingIfPossible(reportRemotely: isLoggedIn)
         } catch is CancellationError {
             return
         } catch let error as LDOError where error == .cancelled {
@@ -544,24 +544,29 @@ final class TopicDetailViewModel: ObservableObject {
         }
     }
 
-    private func startReadingIfPossible() {
-        guard readingEnabled,
-              let detail,
-              detail.hasServerReadState,
+    private func startReadingIfPossible(reportRemotely: Bool) {
+        guard let detail,
+              reportRemotely == false || detail.hasServerReadState,
               trackingTopicID != detail.id else { return }
 
         trackingTopicID = detail.id
+        self.reportRemotely = reportRemotely
+        // 重启跟踪时清掉上一次会话遗留的“同步中”标记。
+        reportingPostNumbers = []
         readingTracker.start(
             topicID: detail.id,
             initiallyRead: readPostNumbers,
             focused: readingFocused,
-            reporter: { [api] topicID, timings, topicTime in
-                try await api.reportTopicTimings(
-                    topicID: topicID,
-                    timings: timings,
-                    topicTime: topicTime
-                )
-            },
+            reportsRemotely: reportRemotely,
+            reporter: reportRemotely
+                ? { [api] topicID, timings, topicTime in
+                    try await api.reportTopicTimings(
+                        topicID: topicID,
+                        timings: timings,
+                        topicTime: topicTime
+                    )
+                }
+                : { _, _, _ in },
             onReporting: { [weak self] postNumbers, reporting in
                 guard let self else { return }
                 if reporting {
@@ -570,12 +575,36 @@ final class TopicDetailViewModel: ObservableObject {
                     self.reportingPostNumbers.subtract(postNumbers)
                 }
             },
+            onPendingRead: { [weak self] postNumbers in
+                // 停留时长达标只代表"本地读完"，先显示为同步中，等服务端确认。
+                self?.reportingPostNumbers.formUnion(postNumbers)
+            },
             onRead: { [weak self] postNumbers in
                 guard let self else { return }
                 self.readPostNumbers.formUnion(postNumbers)
                 self.reportingPostNumbers.subtract(postNumbers)
+            },
+            onSyncFailed: { [weak self] postNumbers, error in
+                guard let self else { return }
+                self.reportingPostNumbers.subtract(postNumbers)
+                self.readPostNumbers.subtract(postNumbers)
+                self.actionMessage = Self.readingSyncMessage(for: error)
             }
         )
+    }
+
+    private static func readingSyncMessage(for error: Error) -> String {
+        guard let requestError = error as? SiteRequestError else {
+            return "阅读状态暂时未能同步，稍后会自动重试。"
+        }
+        switch requestError {
+        case .challengeRequired:
+            return "阅读状态未能同步：请在“登录与验证”中完成 Cloudflare 验证。"
+        case .hostNotReady:
+            return "阅读状态未能同步：站内请求环境尚未就绪，稍后会自动重试。"
+        default:
+            return "阅读状态暂时未能同步，稍后会自动重试。"
+        }
     }
 
     private func merge(posts: [PostItem]) {

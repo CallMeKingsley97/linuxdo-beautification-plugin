@@ -16,13 +16,13 @@ struct SidebarView: View {
         VStack(spacing: 0) {
             List(selection: selectionBinding) {
                 Section("浏览") {
-                    Label("最新", systemImage: "clock")
+                    Label("最新", systemImage: LDOIcon.latest)
                         .tag(BrowseSelection.latest)
-                    Label("热门", systemImage: "flame")
+                    Label("热门", systemImage: LDOIcon.popular)
                         .tag(BrowseSelection.hot)
-                    Label("登录与验证", systemImage: "person.crop.circle.badge.checkmark")
+                    Label("登录与验证", systemImage: LDOIcon.account)
                         .tag(BrowseSelection.site)
-                    Label("设置", systemImage: "gearshape")
+                    Label("设置", systemImage: LDOIcon.settings)
                         .tag(BrowseSelection.settings)
                 }
 
@@ -30,7 +30,7 @@ struct SidebarView: View {
                     accountRow
 
                     HStack(spacing: 8) {
-                        Label("通知", systemImage: "bell")
+                        Label("通知", systemImage: LDOIcon.notifications)
                         Spacer(minLength: 4)
                         if notificationViewModel.unreadCount > 0 {
                             Text(notificationViewModel.unreadCount.formatted())
@@ -51,7 +51,7 @@ struct SidebarView: View {
                     } label: {
                         Label(
                             siteSession.isSessionChecking ? "正在检查会话" : "检查登录状态",
-                            systemImage: "arrow.clockwise"
+                            systemImage: LDOIcon.refresh
                         )
                     }
                     .buttonStyle(.plain)
@@ -80,7 +80,7 @@ struct SidebarView: View {
                     Button {
                         categoryStore.refresh(force: true)
                     } label: {
-                        Label("刷新分类", systemImage: "arrow.triangle.2.circlepath")
+                        Label("刷新分类", systemImage: LDOIcon.refreshCategories)
                     }
                     .help("重新拉取分类列表")
                 }
@@ -109,10 +109,11 @@ struct SidebarView: View {
                             .lineLimit(1)
                     }
                     Spacer(minLength: 4)
-                    Image(systemName: "checkmark.circle.fill")
+                    Image(systemName: LDOIcon.connected)
                         .symbolRenderingMode(.hierarchical)
                         .foregroundStyle(.green)
                         .help("原生会话已连接")
+                        .accessibilityLabel("会话已连接")
                 }
                 .contentShape(Rectangle())
             }
@@ -122,7 +123,7 @@ struct SidebarView: View {
             Button(action: onOpenLogin) {
                 Label(
                     siteSession.isSessionChecking ? "正在检查登录状态…" : "登录 LINUX DO",
-                    systemImage: "person.crop.circle.badge.plus"
+                    systemImage: LDOIcon.login
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
@@ -150,14 +151,18 @@ struct SidebarView: View {
                 Button("重试") {
                     categoryStore.refresh(force: true)
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("重新加载分类列表")
             }
         default:
             ForEach(categoryStore.rootCategories) { category in
                 HStack(spacing: 9) {
-                    Circle()
-                        .fill(categoryColor(category.color))
-                        .frame(width: 7, height: 7)
+                    Image(systemName: LDOIcon.category(category.slug))
+                        .font(.system(size: 13, weight: .semibold))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(LDOCategoryPalette.color(slug: category.slug, fallbackHex: category.color))
+                        .frame(width: 18)
                     Text(category.name)
                         .lineLimit(1)
                     Spacer(minLength: 4)
@@ -208,10 +213,4 @@ struct SidebarView: View {
         )
     }
 
-    private func categoryColor(_ hex: String?) -> Color {
-        guard let hex, let color = Color(hex: hex) else {
-            return Color.secondary.opacity(0.5)
-        }
-        return color
-    }
 }

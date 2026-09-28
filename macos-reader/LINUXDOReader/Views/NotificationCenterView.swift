@@ -26,7 +26,7 @@ struct NotificationCenterView: View {
                     if viewModel.isRefreshing {
                         ProgressView().controlSize(.small)
                     } else {
-                        Label("刷新通知", systemImage: "arrow.clockwise")
+                        Label("刷新通知", systemImage: LDOIcon.refresh)
                     }
                 }
                 .disabled(!siteSession.isLoggedIn || viewModel.isRefreshing)
@@ -36,7 +36,7 @@ struct NotificationCenterView: View {
                     if viewModel.isMarkingAllRead {
                         ProgressView().controlSize(.small)
                     } else {
-                        Label("全部标为已读", systemImage: "checkmark.circle")
+                        Label("全部标为已读", systemImage: LDOIcon.markRead)
                     }
                 }
                 .disabled(!siteSession.isLoggedIn || !viewModel.hasUnread || viewModel.isMarkingAllRead)
@@ -63,7 +63,7 @@ struct NotificationCenterView: View {
             LoadingPane(message: "正在加载通知…")
         case .failed(let message) where viewModel.items.isEmpty:
             ContentUnavailableView {
-                Label("通知加载失败", systemImage: "exclamationmark.triangle")
+                Label("通知加载失败", systemImage: LDOIcon.warning)
             } description: {
                 Text(message)
             } actions: {
@@ -154,16 +154,9 @@ struct NotificationCenterView: View {
             if viewModel.hasMore {
                 HStack {
                     Spacer()
-                    Button(action: viewModel.loadMore) {
-                        HStack(spacing: 6) {
-                            if viewModel.isLoadingMore {
-                                ProgressView().controlSize(.small)
-                            }
-                            Text(viewModel.isLoadingMore ? "正在加载…" : "加载更多")
-                        }
+                    LDOLoadMoreButton(isLoading: viewModel.isLoadingMore) {
+                        viewModel.loadMore()
                     }
-                    .buttonStyle(.bordered)
-                    .disabled(viewModel.isLoadingMore)
                     Spacer()
                 }
                 .padding(.vertical, 12)
@@ -185,7 +178,7 @@ struct NotificationCenterView: View {
 
     private var loggedOutState: some View {
         ContentUnavailableView {
-            Label("登录后查看通知", systemImage: "bell.badge")
+            Label("登录后查看通知", systemImage: LDOIcon.bellBadge)
         } description: {
             Text("通知属于账号私有数据，需要使用当前 LINUX DO 会话。")
         } actions: {
@@ -194,20 +187,13 @@ struct NotificationCenterView: View {
     }
 
     private func errorBanner(_ message: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-            Text(message)
-                .font(.caption)
-                .lineLimit(2)
-            Spacer()
-            Button("关闭", action: viewModel.clearActionMessage)
-                .buttonStyle(.borderless)
+        LDOInlineBanner(
+            message: message,
+            systemImage: LDOIcon.warning,
+            isWarning: true
+        ) {
+            LDOBannerDismissButton { viewModel.clearActionMessage() }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(Color.orange.opacity(0.08))
-        .overlay(alignment: .bottom) { Divider() }
     }
 
     private func open(_ notification: LDOUserNotification) {
@@ -239,8 +225,8 @@ private struct NotificationRow: View {
                         .foregroundStyle(.primary)
                         .lineLimit(2)
                     if notification.isHighPriority {
-                        Image(systemName: "exclamationmark.circle.fill")
-                            .imageScale(.small)
+                Image(systemName: LDOIcon.warning)
+                    .font(.caption.weight(.medium))
                             .foregroundStyle(.orange)
                             .help("高优先级通知")
                     }
@@ -248,7 +234,7 @@ private struct NotificationRow: View {
                         LDOStatusBadge(
                             text: "类型 \(notification.kind.rawValue)",
                             color: .secondary,
-                            systemImage: "questionmark"
+                            systemImage: LDOIcon.questionmark
                         )
                     }
                 }
@@ -282,10 +268,10 @@ private struct NotificationRow: View {
                         .monospacedDigit()
                 }
                 if !notification.isRead {
-                    Circle()
-                        .fill(Color.accentColor)
-                        .frame(width: 7, height: 7)
-                        .accessibilityLabel("未读")
+                    LDOCategoryDot(
+                        color: .accentColor,
+                        accessibilityText: "未读"
+                    )
                 }
             }
         }

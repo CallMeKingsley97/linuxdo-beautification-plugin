@@ -2,7 +2,7 @@
 
 > 工程目录：`macos-reader/`  
 > 技术栈：SwiftUI + Swift · 仅 macOS · 直接分发（非 App Store）  
-> 关联方案：`LINUXDO_macOS_SwiftUI_阅读器方案.md`  
+> 关联方案：`docs/LINUXDO_macOS_SwiftUI_阅读器方案.md`  
 > 最后更新：2026-07-18
 
 ---
@@ -199,6 +199,6 @@ open macos-reader/LINUXDOReader.xcodeproj
 
 | 产物 | 路径 |
 |---|---|
-| 油猴 | `linuxdo-beautification.user.js` |
+| 油猴 | `userscript/linuxdo-beautification.user.js` |
 | 桌面端 | `macos-reader/` |
-| 方案 | `LINUXDO_macOS_SwiftUI_阅读器方案.md` |
+| 方案 | `docs/LINUXDO_macOS_SwiftUI_阅读器方案.md` |

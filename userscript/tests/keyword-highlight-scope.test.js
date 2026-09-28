@@ -4,8 +4,8 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const projectRoot = path.resolve(__dirname, "..");
-const scriptPath = path.join(projectRoot, "linuxdo-beautification.user.js");
+const projectRoot = path.resolve(__dirname, "..", "..");
+const scriptPath = path.join(projectRoot, "userscript", "linuxdo-beautification.user.js");
 const readmePath = path.join(projectRoot, "README.md");
 const source = fs.readFileSync(scriptPath, "utf8");
 const readme = fs.readFileSync(readmePath, "utf8");

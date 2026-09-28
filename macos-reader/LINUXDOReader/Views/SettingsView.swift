@@ -7,6 +7,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     var usesStandaloneWindowSize = false
+    @State private var showsClearDataConfirmation = false
 
     var body: some View {
         Group {
@@ -27,10 +28,23 @@ struct SettingsView: View {
         .navigationTitle("设置")
     }
 
+    private var sessionStatusText: String {
+        if appState.siteSession.isSessionChecking { return "正在检查会话" }
+        if let user = appState.siteSession.currentUser {
+            return "已登录 @\(user.username)"
+        }
+        return "未登录 · 使用官方 RSS 阅读"
+    }
+
+    private var sessionStatusIcon: String {
+        if appState.siteSession.isSessionChecking { return LDOIcon.refresh }
+        return appState.siteSession.isLoggedIn ? LDOIcon.connected : LDOIcon.person
+    }
+
     private var settingsForm: some View {
         Form {
             Section {
-                HStack(spacing: 12) {
+                HStack(spacing: LDOTheme.spacing12) {
                     LDOAppMark(size: 44)
                     VStack(alignment: .leading, spacing: 3) {
                         Text("LINUX DO 阅读器")
@@ -39,6 +53,7 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                    Spacer(minLength: 0)
                 }
                 .padding(.vertical, 4)
             }
@@ -46,28 +61,51 @@ struct SettingsView: View {
             Section("关于") {
                 LabeledContent("应用") { Text("LINUX DO 阅读器") }
                 LabeledContent("版本") { Text("0.7.0") }
-                LabeledContent("模式") { Text("WebKit 会话 JSON + RSS 回退") }
-                Text("本应用为第三方非官方客户端，与 LINUX DO / Discourse 官方无隶属关系。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                LabeledContent("阅读来源") { Text("站内会话 · 未登录时用 RSS") }
+                LDOFooterText(text: "第三方非官方客户端，与 LINUX DO / Discourse 官方无隶属关系。")
             }
 
-            Section("站内登录") {
-                Text("登录由 App 内 WebKit 完成。仅 linux.do 域的会话 Cookie 会加密保存在 macOS 钥匙串，用于 App 重启后恢复登录；账号密码不会由 App 保存。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button(role: .destructive) {
-                    appState.siteSession.clearWebsiteData()
-                } label: {
-                    if appState.siteSession.isClearingData {
-                        ProgressView("正在清除…")
-                    } else {
-                        Text("清除 LINUX DO 登录数据")
+            Section {
+                LabeledContent("状态") {
+                    HStack(spacing: LDOTheme.spacing8) {
+                        if appState.siteSession.isSessionChecking {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Label(sessionStatusText, systemImage: sessionStatusIcon)
+                            .labelStyle(.titleAndIcon)
+                            .foregroundStyle(.secondary)
                     }
                 }
-                .disabled(appState.siteSession.isClearingData)
+
+                HStack(spacing: LDOTheme.spacing8) {
+                    Button("登录与验证") {
+                        appState.openLogin()
+                    }
+                    .buttonStyle(.bordered)
+                    .help("在 App 内的 WebKit 中完成登录与 Cloudflare 验证")
+
+                    Button(role: .destructive) {
+                        showsClearDataConfirmation = true
+                    } label: {
+                        Text("清除登录数据")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(appState.siteSession.isClearingData)
+                    .help("清除 App 内的登录会话与站点数据")
+
+                    if appState.siteSession.isClearingData {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("正在清除…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("站内登录")
+            } footer: {
+                LDOFooterText(text: "登录在 App 内的 WebKit 中完成；只有 linux.do 的会话 Cookie 会加密存入 macOS 钥匙串，用于重启后恢复登录，App 不保存账号密码。")
             }
 
             HighlightSettingsSections(
@@ -76,16 +114,30 @@ struct SettingsView: View {
             )
 
             Section("网络") {
-                LabeledContent("站点") { Text("https://linux.do") }
+                LabeledContent("站点") {
+                    Text(verbatim: "https://linux.do")
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
                 LabeledContent("列表缓存") { Text("\(Int(appState.apiClient.listTTL)) 秒") }
                 LabeledContent("详情缓存") { Text("\(Int(appState.apiClient.detailTTL)) 秒") }
                 LabeledContent("列表刷新") { Text("仅手动，无定时刷新") }
-                Text("Cookie 不会显示、记录或导出；仅由 WebKit 自动随 linux.do 同源请求发送。未登录或请求宿主不可用时，公开阅读回退到官方 RSS。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                LDOFooterText(text: "Cookie 由 WebKit 随 linux.do 同源请求自动发送，App 不读取也不导出；未登录或请求宿主不可用时，公开阅读回退到官方 RSS。")
             }
         }
         .formStyle(.grouped)
+        .confirmationDialog(
+            "清除 LINUX DO 登录数据？",
+            isPresented: $showsClearDataConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("清除", role: .destructive) {
+                appState.siteSession.clearWebsiteData()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将删除 App 内保存的登录会话与站点数据，之后需要重新登录并完成验证。")
+        }
     }
 }
 
@@ -121,7 +173,7 @@ private struct HighlightSettingsSections: View {
             }
 
             if let error = store.followedUsersSyncError {
-                Label(error, systemImage: "exclamationmark.triangle")
+                Label(error, systemImage: LDOIcon.warning)
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
@@ -130,26 +182,22 @@ private struct HighlightSettingsSections: View {
             Button {
                 store.syncFollowedUsers(force: true)
             } label: {
-                Label("同步关注名单", systemImage: "arrow.triangle.2.circlepath")
+                Label("同步关注名单", systemImage: LDOIcon.refreshCategories)
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.bordered)
             .disabled(!isLoggedIn || store.isSyncingFollowedUsers)
+            .help(isLoggedIn ? "立即重新同步关注名单" : "登录后可同步关注名单")
         } header: {
             Text("关注作者高亮")
         } footer: {
-            Text("登录后每天同步一次关注名单。主题列表按参与作者标记，楼层按回复作者标记；关注与关键词同时命中时，两种状态都会保留。名单仅存储在本机。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
+            LDOFooterText(text: "登录后每天同步一次关注名单。主题列表按参与作者标记，楼层按回复作者标记；关注与关键词同时命中时，两种状态都会保留。名单仅存储在本机。")
         }
 
         Section {
             Toggle("启用关键词高亮", isOn: $store.keywordsEnabled)
 
             if store.keywordRules.isEmpty {
-                Label("尚未添加关键词", systemImage: "text.magnifyingglass")
+                Label("尚未添加关键词", systemImage: LDOIcon.search)
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(store.keywordRules) { rule in
@@ -164,19 +212,14 @@ private struct HighlightSettingsSections: View {
             Button {
                 editingKeywordRuleID = store.addKeywordRule()
             } label: {
-                Label("添加关键词", systemImage: "plus")
+                Label("添加关键词", systemImage: LDOIcon.plus)
             }
-            .buttonStyle(.borderless)
-            .controlSize(.small)
+            .buttonStyle(.bordered)
+            .help("新增一条关键词高亮规则")
         } header: {
             Text("帖子关键词高亮")
         } footer: {
-            Text("仅匹配主题标题且不区分大小写；多条规则同时命中时，列表中靠前的规则优先。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
+            LDOFooterText(text: "仅匹配主题标题且不区分大小写；多条规则同时命中时，列表中靠前的规则优先。")
         }
     }
 
@@ -234,13 +277,12 @@ private struct KeywordRuleSettingsRow: View {
             Toggle("启用关键词 " + displayKeyword, isOn: enabledBinding)
                 .labelsHidden()
                 .toggleStyle(.switch)
-                .controlSize(.mini)
                 .help(rule.enabled ? "停用此关键词" : "启用此关键词")
 
             Button {
                 isEditorPresented = true
             } label: {
-                Image(systemName: "ellipsis.circle")
+                Image(systemName: LDOIcon.ellipsisCircle)
                     .symbolRenderingMode(.hierarchical)
             }
             .buttonStyle(.borderless)
@@ -270,7 +312,7 @@ private struct KeywordRuleSettingsRow: View {
     private var keywordEditor: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 8) {
-                Image(systemName: "text.magnifyingglass")
+                Image(systemName: LDOIcon.search)
                     .foregroundStyle(colorBinding.wrappedValue)
                 Text("编辑关键词")
                     .font(.headline)
@@ -280,7 +322,7 @@ private struct KeywordRuleSettingsRow: View {
                 TextField("输入关键词", text: keywordBinding)
                     .textFieldStyle(.roundedBorder)
                     .labelsHidden()
-                    .frame(width: 190)
+                    .frame(width: 200)
                     .accessibilityLabel("关键词")
             }
 
@@ -296,16 +338,19 @@ private struct KeywordRuleSettingsRow: View {
 
             Divider()
 
-            HStack {
+            HStack(spacing: LDOTheme.spacing8) {
                 Button("删除关键词", role: .destructive) {
                     removeRule()
                 }
+                .buttonStyle(.bordered)
+                .foregroundStyle(.red)
 
-                Spacer()
+                Spacer(minLength: LDOTheme.spacing12)
 
                 Button("完成") {
                     isEditorPresented = false
                 }
+                .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
             }
         }
@@ -314,15 +359,12 @@ private struct KeywordRuleSettingsRow: View {
     }
 
     private var keywordColorChip: some View {
-        RoundedRectangle(cornerRadius: 3, style: .continuous)
-            .fill(colorBinding.wrappedValue)
-            .frame(width: 12, height: 12)
-            .overlay {
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .stroke(Color.primary.opacity(0.14), lineWidth: 0.5)
-            }
-            .opacity(rule.enabled ? 1 : 0.45)
-            .accessibilityHidden(true)
+        LDOCategoryDot(
+            color: colorBinding.wrappedValue,
+            size: 10,
+            isOutlined: true
+        )
+        .opacity(rule.enabled ? 1 : 0.45)
     }
 
     private var displayKeyword: String {

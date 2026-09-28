@@ -34,7 +34,7 @@ struct TopicListView: View {
                         ProgressView()
                             .controlSize(.small)
                     } else {
-                        Label("刷新", systemImage: "arrow.clockwise")
+                        Label("刷新", systemImage: LDOIcon.refresh)
                     }
                 }
                 .help("刷新列表（⌘R）")
@@ -51,7 +51,7 @@ struct TopicListView: View {
         List(selection: $selectedTopicID) {
             if case .failed(let message) = viewModel.phase {
                 Section {
-                    Label(message, systemImage: "exclamationmark.triangle")
+                    Label(message, systemImage: LDOIcon.warning)
                         .foregroundStyle(.orange)
                         .font(.caption)
                 }
@@ -68,7 +68,14 @@ struct TopicListView: View {
                     followedColor: highlightStore.followedColor
                 )
                     .tag(topic.id)
-                    .listRowInsets(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
+                    .listRowInsets(
+                        EdgeInsets(
+                            top: LDOTheme.listRowVerticalInset,
+                            leading: LDOTheme.spacing12,
+                            bottom: LDOTheme.listRowVerticalInset,
+                            trailing: LDOTheme.spacing12
+                        )
+                    )
                     .listRowSeparator(.visible)
                     .listRowSeparatorTint(LDOTheme.separator)
                     .listRowBackground(Color.clear)
@@ -107,28 +114,29 @@ struct TopicListView: View {
                     .controlSize(.small)
                 Spacer()
             }
-            .padding(.vertical, 8)
+            .padding(.vertical, LDOTheme.spacing8)
         } else {
             HStack {
                 Spacer()
-                Button("加载更多") {
+                LDOLoadMoreButton(isLoading: false) {
                     viewModel.loadMore()
                 }
-                .buttonStyle(.bordered)
                 Spacer()
             }
-            .padding(.vertical, 6)
+            .padding(.vertical, LDOTheme.spacing8)
         }
     }
 
     private func statusBar(updated: Date) -> some View {
         HStack(spacing: 6) {
             if viewModel.needsRefresh {
-                Image(systemName: "arrow.down.circle")
+                Image(systemName: LDOIcon.needsRefresh)
+                    .font(.caption.weight(.medium))
                 Text("登录状态已变化，请下拉刷新")
                     .foregroundStyle(.orange)
             } else {
-                Image(systemName: "clock")
+                Image(systemName: LDOIcon.updated)
+                    .font(.caption.weight(.medium))
                 Text("更新于 \(updated.formatted(date: .omitted, time: .shortened))")
             }
             Spacer()
@@ -138,7 +146,7 @@ struct TopicListView: View {
         .font(.caption2)
         .foregroundStyle(.secondary)
         .padding(.horizontal, 12)
-        .frame(height: 28)
+        .frame(height: LDOTheme.listStatusBarHeight)
         .background(.bar)
         .overlay(alignment: .top) { Divider() }
     }
